@@ -7,7 +7,9 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
+from fabkit.config import check_config, load_deploy_config
 from fabkit.errors import FabkitError, Findings
+from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
 from fabkit.value_sets import check_value_sets
 
@@ -23,6 +25,17 @@ def report(findings: Findings, what: str) -> int:
         return 1
     print(f"{what} passed.")
     return 0
+
+
+def run_validate(args: argparse.Namespace) -> int:
+    """File checks for every environment. Never logs in."""
+    config = load_deploy_config(Path(args.config))
+    findings = check_config(config)
+    if not findings.errors:
+        findings.extend(check_parameters(config, unmatched_find_value=args.unmatched_find_value))
+    findings.extend(check_logical_ids(Path.cwd()))
+    findings.extend(check_value_sets(Path.cwd()))
+    return report(findings, "Validation")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,6 +55,16 @@ def build_parser() -> argparse.ArgumentParser:
         "check-value-sets", help="Check VariableLibrary value-set overrides (current directory)."
     )
     hook.set_defaults(func=lambda _: report(check_value_sets(Path.cwd()), "Value-set check"))
+
+    validate = subparsers.add_parser("validate", help="Check the repository files. No login.")
+    validate.add_argument("--config", default="config.yml", help="fabric-cicd config file.")
+    validate.add_argument(
+        "--unmatched-find-value",
+        choices=["error", "warning"],
+        default="error",
+        help="Whether a find_value that matches no file fails validation.",
+    )
+    validate.set_defaults(func=run_validate)
 
     return parser
 
