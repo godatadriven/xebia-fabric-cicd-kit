@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -62,3 +63,10 @@ def assert_reported(messages: list[str], *fragments: str) -> None:
     assert any(all(f in m for f in fragments) for m in messages), (
         f"no message containing {fragments} in {messages}"
     )
+
+
+class FakeCredential:
+    """A credential that hands out a dummy token."""
+
+    def get_token(self, *_: Any) -> Any:
+        return SimpleNamespace(token="token")
