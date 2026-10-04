@@ -70,3 +70,23 @@ class FakeCredential:
 
     def get_token(self, *_: Any) -> Any:
         return SimpleNamespace(token="token")
+
+
+class FakeOneLake:
+    """Records OneLake writes as '<workspace>/<path>' -> bytes."""
+
+    def __init__(self) -> None:
+        self.written: dict[str, bytes] = {}
+
+    def get_file_system_client(self, workspace_id: str) -> Any:
+        def get_file_client(path: str) -> Any:
+            def upload_data(data: Any, overwrite: bool) -> None:
+                assert overwrite, "uploads must overwrite"
+                self.written[f"{workspace_id}/{path}"] = data.read()
+
+            def create_file() -> None:
+                self.written[f"{workspace_id}/{path}"] = b""
+
+            return SimpleNamespace(upload_data=upload_data, create_file=create_file)
+
+        return SimpleNamespace(get_file_client=get_file_client)
