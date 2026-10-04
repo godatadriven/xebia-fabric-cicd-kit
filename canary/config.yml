@@ -1,0 +1,16 @@
+core:
+  workspace:
+    CANARY: fabkit-canary
+    MISSING_CONNECTION: fabkit-canary
+    BINDING_WARNING: fabkit-canary
+  repository_directory: src
+  item_types_in_scope: [Notebook, SemanticModel]
+  parameter:
+    CANARY: parameter.yml
+    MISSING_CONNECTION: parameter-missing-connection.yml
+    BINDING_WARNING: parameter-missing-connection.yml
+unpublish:
+  skip:
+    CANARY: false
+    MISSING_CONNECTION: true
+    BINDING_WARNING: true

@@ -1,0 +1,10 @@
+table Canary
+
+	column Value
+		dataType: int64
+		isNameInferred
+		sourceColumn: [Value]
+
+	partition Canary = calculated
+		mode: import
+		source = DATATABLE("Value", INTEGER, {{1}})

@@ -1,0 +1,64 @@
+name: canary
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths: [uv.lock, pyproject.toml]
+
+permissions:
+  id-token: write
+  contents: read
+
+# One canary at a time: they share a workspace
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    # Pull requests from forks never reach the canary environment
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: canary
+    timeout-minutes: 30
+    env:
+      CAPACITY_RESOURCE_ID: ${{ secrets.CAPACITY_RESOURCE_ID }}
+      LAKEHOUSE_ID: ${{ secrets.CANARY_LAKEHOUSE_ID }}
+    defaults:
+      run:
+        working-directory: canary
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resume capacity
+        run: ./capacity.sh resume
+
+      - name: Publish and upload
+        run: uv run --project .. fabkit deploy --environment CANARY --upload "lib/=${LAKEHOUSE_ID}:Files/_canary/lib/"
+
+      - name: Unresolvable connection stops the deploy
+        run: |
+          set -uo pipefail
+          output=$(uv run --project .. fabkit deploy --environment MISSING_CONNECTION 2>&1) && code=0 || code=$?
+          echo "${output}"
+          [[ ${code} -eq 1 && "${output}" == *"Connection check failed"* ]]
+
+      - name: fabric-cicd binding warning fails the deploy
+        run: |
+          set -uo pipefail
+          output=$(uv run --project .. fabkit deploy --environment BINDING_WARNING --skip-connection-check 2>&1) && code=0 || code=$?
+          echo "${output}"
+          [[ ${code} -eq 1 && "${output}" == *"warning treated as failure"* ]]
+
+      - name: Pause capacity
+        if: always()
+        run: ./capacity.sh pause

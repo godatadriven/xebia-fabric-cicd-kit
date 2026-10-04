@@ -1,0 +1,5 @@
+semantic_model_binding:
+  models:
+    - semantic_model_name: canary_model
+      connection_id:
+        _ALL_: "00000000-0000-0000-0000-00000000dead"
