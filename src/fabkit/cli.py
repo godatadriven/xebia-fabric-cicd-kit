@@ -8,9 +8,12 @@ from importlib.metadata import version
 from pathlib import Path
 
 from fabkit.config import check_config, load_deploy_config
+from fabkit.connections import DEFAULT_CONNECTION_VARIABLES
+from fabkit.deploy import run_deploy
 from fabkit.errors import FabkitError, Findings
 from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
+from fabkit.uploads import parse_upload
 from fabkit.value_sets import check_value_sets
 
 
@@ -65,6 +68,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Whether a find_value that matches no file fails validation.",
     )
     validate.set_defaults(func=run_validate)
+
+    deploy = subparsers.add_parser("deploy", help="Check, then deploy with fabric-cicd.")
+    deploy.add_argument("--environment", required=True, help="Environment key in config.yml.")
+    deploy.add_argument("--config", default="config.yml", help="fabric-cicd config file.")
+    deploy.add_argument(
+        "--upload",
+        action="append",
+        type=parse_upload,
+        metavar="LOCAL=LAKEHOUSE_ID:FILES_PATH",
+        help="Copy a local file or folder into a lakehouse after publishing. Repeatable.",
+    )
+    deploy.add_argument(
+        "--connection-variables",
+        default=DEFAULT_CONNECTION_VARIABLES,
+        help="Regex for variable-library variables that hold connection IDs.",
+    )
+    deploy.add_argument(
+        "--skip-connection-check",
+        action="store_true",
+        help="Skip the connection pre-flight. For testing fabkit itself.",
+    )
+    deploy.set_defaults(func=run_deploy)
 
     return parser
 
