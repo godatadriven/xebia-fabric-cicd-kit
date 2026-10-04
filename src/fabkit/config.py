@@ -59,7 +59,10 @@ def load_deploy_config(path: Path) -> DeployConfig:
     """Read a fabric-cicd config.yml."""
     if not path.is_file():
         raise FabkitError(f"Config file not found: {path}")
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as error:
+        raise FabkitError(f"{path.name}: invalid YAML.", [str(error)]) from error
     if not isinstance(raw, dict):
         raise FabkitError(f"{path.name}: expected a mapping at the top level.")
     return DeployConfig(path=path.resolve(), raw=raw)

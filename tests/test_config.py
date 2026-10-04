@@ -87,3 +87,11 @@ def test_fabric_cicd_validation_runs(fabric_repo: FabricRepo) -> None:
     )
 
     assert_reported(config_errors(fabric_repo), "fabric-cicd rejected")
+
+
+# A config.yml with invalid YAML is a FabkitError, not a traceback.
+def test_invalid_yaml_config_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("config.yml", "core: [\n")
+
+    with pytest.raises(FabkitError, match="invalid YAML"):
+        load_deploy_config(fabric_repo.config)
