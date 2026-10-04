@@ -1,5 +1,6 @@
 import argparse
 from importlib.metadata import version
+from pathlib import Path
 
 import pytest
 
@@ -31,3 +32,14 @@ def test_fabkit_error_prints_message_and_exits_1(capsys: pytest.CaptureFixture[s
     assert "the check failed" in err
     assert "- first detail" in err
     assert "Traceback" not in err
+
+
+# check-logical-ids exits 1 on a duplicate, from the current directory.
+def test_check_logical_ids_command_fails_on_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for item in ("a.Notebook", "b.Notebook"):
+        (tmp_path / item).mkdir()
+        (tmp_path / item / ".platform").write_text('{"config": {"logicalId": "1"}}')
+    monkeypatch.chdir(tmp_path)
+    assert main(["check-logical-ids"]) == 1

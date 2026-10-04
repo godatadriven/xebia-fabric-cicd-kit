@@ -5,8 +5,24 @@ from __future__ import annotations
 import argparse
 import sys
 from importlib.metadata import version
+from pathlib import Path
 
-from fabkit.errors import FabkitError
+from fabkit.errors import FabkitError, Findings
+from fabkit.platform_files import check_logical_ids
+from fabkit.value_sets import check_value_sets
+
+
+def report(findings: Findings, what: str) -> int:
+    """Print findings and return the exit code."""
+    for warning in findings.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    for error in findings.errors:
+        print(f"error: {error}", file=sys.stderr)
+    if findings.errors:
+        print(f"{what} failed with {len(findings.errors)} error(s).", file=sys.stderr)
+        return 1
+    print(f"{what} passed.")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -15,7 +31,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version", version=f"fabkit {version('xebia-fabric-cicd-kit')}"
     )
-    parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    hook = subparsers.add_parser(
+        "check-logical-ids", help="Check .platform logicalIds are unique (current directory)."
+    )
+    hook.set_defaults(func=lambda _: report(check_logical_ids(Path.cwd()), "logicalId check"))
+
+    hook = subparsers.add_parser(
+        "check-value-sets", help="Check VariableLibrary value-set overrides (current directory)."
+    )
+    hook.set_defaults(func=lambda _: report(check_value_sets(Path.cwd()), "Value-set check"))
+
     return parser
 
 

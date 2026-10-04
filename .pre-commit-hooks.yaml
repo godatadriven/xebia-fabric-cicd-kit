@@ -1,0 +1,16 @@
+---
+- id: fabkit-logical-ids
+  name: Check .platform logicalId uniqueness
+  description: Fails when two Fabric items share a config.logicalId.
+  entry: fabkit check-logical-ids
+  language: python
+  # A duplicate is a relation between files, so the check always reads the whole repository
+  files: (^|/)\.platform$
+  pass_filenames: false
+- id: fabkit-value-sets
+  name: Check VariableLibrary value-set overrides
+  description: Fails when an override has keys other than name and value.
+  entry: fabkit check-value-sets
+  language: python
+  files: \.VariableLibrary/valueSets/.*\.json$
+  pass_filenames: false
