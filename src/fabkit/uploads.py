@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from fabkit.errors import FabkitError
+from fabkit.parameters import GUID_PATTERN
 
-GUID_PATTERN = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
 ONELAKE_URL = "https://onelake.dfs.fabric.microsoft.com"
 
 
@@ -41,6 +38,8 @@ def parse_upload(spec: str) -> Upload:
     target = target.strip("/")
     if target != "Files" and not target.startswith("Files/"):
         raise argparse.ArgumentTypeError(f"--upload {spec!r}: the target must be under Files/.")
+    if ".." in target.split("/"):
+        raise argparse.ArgumentTypeError(f"--upload {spec!r}: the target must not contain '..'.")
     return Upload(Path(local), lakehouse_id, target)
 
 

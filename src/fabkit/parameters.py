@@ -17,8 +17,11 @@ ALL_ENVIRONMENTS_KEY = "_ALL_"
 # Marks a value that cannot exist yet. Allowed everywhere except the deploy target.
 PENDING_MARKER = "PLACEHOLDER"
 
-# Leftovers from filling in a file: TODO, FIXME, <angle-bracketed>, XXXXXXXX
-PLACEHOLDER_PATTERN = re.compile(r"TODO|FIXME|^<.*>$|XXXXXXXX", re.IGNORECASE)
+# Leftovers from filling in a file: the words TODO and FIXME, <angle-bracketed>, XXXXXXXX
+PLACEHOLDER_PATTERN = re.compile(r"\bTODO\b|\bFIXME\b|^<.*>$|XXXXXXXX", re.IGNORECASE)
+
+# fabric-cicd resolves values starting with this at deploy, e.g. "$workspace.$id"
+DYNAMIC_VALUE_PREFIX = "$"
 
 GUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -72,7 +75,9 @@ def check_parameters(
             else:
                 findings.errors.extend(pending)
 
-        unmatched = _unmatched_find_values(parameters, repository_directory)
+        unmatched = _unmatched_find_values(
+            parameters, repository_directory, set(_files_by_environment(config))
+        )
         if unmatched_find_value == "error":
             findings.errors.extend(unmatched)
         else:
@@ -96,17 +101,27 @@ def _load(parameter_file: Path) -> dict[str, Any]:
         raise FabkitError(f"Parameter file not found: {parameter_file}")
     try:
         loaded = yaml.safe_load(parameter_file.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as error:
+    except (yaml.YAMLError, UnicodeDecodeError) as error:
         raise FabkitError(f"{parameter_file.name}: invalid YAML.", [str(error)]) from error
     if not isinstance(loaded, dict):
         raise FabkitError(f"{parameter_file.name}: expected a mapping at the top level.")
     return loaded
 
 
+def enumerate_mappings(value: Any) -> list[tuple[int, dict[str, Any]]]:
+    """The mapping entries of a list, with their 1-based position.
+
+    Anything else is left for fabric-cicd's validator to report.
+    """
+    if not isinstance(value, list):
+        return []
+    return [(index, entry) for index, entry in enumerate(value, start=1) if isinstance(entry, dict)]
+
+
 def iter_environment_blocks(parameters: dict[str, Any]) -> list[EnvironmentBlock]:
     """Every environment-keyed mapping in the parameter file."""
     blocks: list[EnvironmentBlock] = []
-    for index, entry in enumerate(parameters.get("find_replace") or [], start=1):
+    for index, entry in enumerate_mappings(parameters.get("find_replace")):
         replace_value = entry.get("replace_value")
         if isinstance(replace_value, dict):
             find_value = entry.get("find_value")
@@ -114,19 +129,40 @@ def iter_environment_blocks(parameters: dict[str, Any]) -> list[EnvironmentBlock
                 EnvironmentBlock(
                     f"find_replace[{index}] (find_value: {find_value!r})",
                     replace_value,
-                    str(find_value) if find_value is not None else None,
+                    find_value if isinstance(find_value, str) else None,
                 )
             )
+    for name, key in (("key_value_replace", "find_key"), ("spark_pool", "instance_pool_id")):
+        for index, entry in enumerate_mappings(parameters.get(name)):
+            replace_value = entry.get("replace_value")
+            if isinstance(replace_value, dict):
+                blocks.append(
+                    EnvironmentBlock(
+                        f"{name}[{index}] ({key}: {entry.get(key)!r})", replace_value, None
+                    )
+                )
 
-    binding = parameters.get("semantic_model_binding") or {}
-    default = binding.get("default") or {}
-    if isinstance(default.get("connection_id"), dict):
+    binding = parameters.get("semantic_model_binding")
+    if isinstance(binding, list):
+        for index, entry in enumerate_mappings(binding):
+            if isinstance(entry.get("connection_id"), dict):
+                name = entry.get("semantic_model_name", "<unnamed>")
+                blocks.append(
+                    EnvironmentBlock(
+                        f"semantic_model_binding[{index}] ({name})", entry["connection_id"], None
+                    )
+                )
+        return blocks
+    if not isinstance(binding, dict):
+        return blocks
+    default = binding.get("default")
+    if isinstance(default, dict) and isinstance(default.get("connection_id"), dict):
         blocks.append(
             EnvironmentBlock(
                 "semantic_model_binding.default.connection_id", default["connection_id"], None
             )
         )
-    for index, model in enumerate(binding.get("models") or [], start=1):
+    for index, model in enumerate_mappings(binding.get("models")):
         if isinstance(model.get("connection_id"), dict):
             name = model.get("semantic_model_name", "<unnamed>")
             blocks.append(
@@ -205,9 +241,10 @@ def _shape_errors(block: EnvironmentBlock) -> list[str]:
     return [
         f"{block.description}[{key}]: {text!r} does not have the shape of a {shape_name}, "
         "while find_value does."
-        for key in block.values
-        for text in _values_of(block, key)
-        if not _is_pending(text)
+        for key, text in block.values.items()
+        if isinstance(text, str)
+        and not text.startswith(DYNAMIC_VALUE_PREFIX)
+        and not _is_pending(text)
         and not PLACEHOLDER_PATTERN.search(text)
         and not pattern.match(text)
     ]
@@ -233,40 +270,60 @@ def _pending_messages(block: EnvironmentBlock, target_environment: str | None) -
     """Pending values: all of them, or only those the target environment would receive."""
     messages = []
     for key in block.values:
-        applies = target_environment is None or key in (target_environment, ALL_ENVIRONMENTS_KEY)
+        applies = (
+            target_environment is None
+            or str(key) == target_environment
+            or str(key).upper() == ALL_ENVIRONMENTS_KEY
+        )
         if applies and any(_is_pending(text) for text in _values_of(block, key)):
             where = f" and would be deployed to {target_environment}" if target_environment else ""
             messages.append(f"{block.description}[{key}]: still {PENDING_MARKER}{where}.")
     return messages
 
 
-def _unmatched_find_values(parameters: dict[str, Any], repository_directory: Path) -> list[str]:
+def _unmatched_find_values(
+    parameters: dict[str, Any], repository_directory: Path, parameter_files: set[Path]
+) -> list[str]:
     """find_values that occur in no repository file. fabric-cicd skips them silently."""
-    entries = parameters.get("find_replace") or []
+    entries = enumerate_mappings(parameters.get("find_replace"))
     if not entries:
         return []
 
     contents = []
     for path in repository_directory.rglob("*"):
         # Every find_value occurs in the parameter file itself
-        if not path.is_file() or path.name == "parameter.yml":
+        if not path.is_file() or path.resolve() in parameter_files:
             continue
         try:
             contents.append(path.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, OSError):
             continue
+    lowered = [text.lower() for text in contents]
 
     messages = []
-    for index, entry in enumerate(entries, start=1):
-        find_value = entry.get("find_value")
-        if not find_value or entry.get("is_regex"):
+    for index, entry in entries:
+        find_value = str(entry.get("find_value") or "")
+        if (
+            not find_value
+            or find_value.startswith(DYNAMIC_VALUE_PREFIX)
+            or _is_true(entry.get("is_regex"))
+        ):
             continue
-        if not any(str(find_value) in text for text in contents):
+        if _is_true(entry.get("ignore_case")):
+            found = any(find_value.lower() in text for text in lowered)
+        else:
+            found = any(find_value in text for text in contents)
+        if not found:
             messages.append(
-                f"find_replace[{index}]: find_value {str(find_value)!r} matches nothing under "
+                f"find_replace[{index}]: find_value {find_value!r} matches nothing under "
                 f"{repository_directory.name}/. The replacement is silently skipped."
             )
     return messages
+
+
+def _is_true(flag: Any) -> bool:
+    """fabric-cicd's reading of a "true"/"false" option."""
+    return str(flag).lower() == "true"
 
 
 def _fabric_cicd_errors(
@@ -288,10 +345,17 @@ def _fabric_cicd_errors(
             repository_directory=repository_directory,
             item_type_in_scope=config.item_types(environment) or list(ACCEPTED_ITEM_TYPES),
             environment=environment,
-            parameter_file_name=parameter_file.name,
             parameter_file_path=str(parameter_file),
         )
-        if not parameter._validate_parameter_file():
+        try:
+            valid = parameter._validate_parameter_file()
+        except Exception as error:  # fabric-cicd's validator crashes on some malformed entries
+            errors.append(
+                f"fabric-cicd could not validate {parameter_file.name} for {environment}: "
+                f"{type(error).__name__}: {error}. Check the structure of every entry."
+            )
+            continue
+        if not valid:
             errors.append(
                 f"fabric-cicd rejected {parameter_file.name} for {environment}; "
                 "its log above names the problem."

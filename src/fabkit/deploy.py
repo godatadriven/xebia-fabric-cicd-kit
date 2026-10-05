@@ -12,7 +12,9 @@ from fabkit.config import DeployConfig, check_config, load_deploy_config
 from fabkit.connections import FABRIC_API_ROOT, FABRIC_SCOPE, get_json, verify_connections
 from fabkit.errors import FabkitError, Findings
 from fabkit.parameters import check_parameters
+from fabkit.platform_files import check_logical_ids
 from fabkit.uploads import Upload, check_uploads, onelake_client, run_uploads
+from fabkit.value_sets import check_value_sets
 from fabkit.warnings import collect_fatal_logs
 
 
@@ -66,6 +68,8 @@ def run_deploy(args: argparse.Namespace) -> int:
     findings = check_config(config)
     if not findings.errors:
         findings.extend(check_parameters(config, target_environment=environment))
+    findings.extend(check_logical_ids(Path.cwd()))
+    findings.extend(check_value_sets(Path.cwd()))
     if findings.errors:
         raise FabkitError("Checks failed. Nothing was published.", findings.errors)
     _print_warnings(findings)

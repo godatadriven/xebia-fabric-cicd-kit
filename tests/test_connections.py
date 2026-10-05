@@ -6,7 +6,7 @@ from urllib import error
 import pytest
 import yaml
 from azure.core.exceptions import ClientAuthenticationError
-from helpers import FabricRepo, FakeCredential, assert_reported
+from helpers import CONFIG, FabricRepo, FakeCredential, assert_reported
 
 from fabkit import connections
 from fabkit.config import load_deploy_config
@@ -42,7 +42,12 @@ def write_default_binding(repo: FabricRepo) -> None:
     repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": binding}))
 
 
+def include_variable_libraries(repo: FabricRepo) -> None:
+    repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, VariableLibrary]"))
+
+
 def write_variable_library(repo: FabricRepo) -> None:
+    include_variable_libraries(repo)
     variables = [{"name": "SqlConnectionID", "value": CONN_A}, {"name": "Other", "value": "x"}]
     repo.write("src/vars.VariableLibrary/variables.json", json.dumps({"variables": variables}))
     overrides = [{"name": "SqlConnectionID", "value": CONN_B}]
@@ -183,6 +188,7 @@ def test_malformed_parameter_file_fails(fabric_repo: FabricRepo) -> None:
 
 # A malformed variables.json is reported by file name.
 def test_malformed_variables_file_fails(fabric_repo: FabricRepo) -> None:
+    include_variable_libraries(fabric_repo)
     fabric_repo.write("src/vars.VariableLibrary/variables.json", "{not json")
 
     with pytest.raises(FabkitError, match="variables.json: invalid JSON"):
@@ -202,6 +208,7 @@ def test_login_failure_fails() -> None:
 
 # A null or empty variable value is not collected as a connection ID.
 def test_empty_variable_values_are_skipped(fabric_repo: FabricRepo) -> None:
+    include_variable_libraries(fabric_repo)
     variables = [
         {"name": "AConnectionID", "value": None},
         {"name": "BConnectionID", "value": ""},
@@ -223,3 +230,40 @@ def test_null_override_hides_base_value(fabric_repo: FabricRepo) -> None:
     )
 
     assert collect(fabric_repo, "PROD") == {}
+
+
+# Variable libraries are not scanned when item_types_in_scope leaves them out.
+def test_variable_libraries_out_of_scope_are_skipped(fabric_repo: FabricRepo) -> None:
+    write_variable_library(fabric_repo)
+    fabric_repo.write("config.yml", CONFIG)
+
+    assert collect(fabric_repo, "DEV") == {}
+
+
+# A legacy binding list applies its connection ID to every environment.
+def test_collects_legacy_binding(fabric_repo: FabricRepo) -> None:
+    binding = [{"connection_id": CONN_A, "semantic_model_name": "sales"}]
+    fabric_repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": binding}))
+
+    found = collect(fabric_repo, "PROD")
+
+    assert found == {CONN_A: ["parameter.yml: semantic_model_binding[1] (sales)"]}
+
+
+# A legacy binding with a per-environment mapping is collected for the target only.
+def test_collects_legacy_binding_mapping_for_target(fabric_repo: FabricRepo) -> None:
+    binding = [
+        {"connection_id": {"DEV": CONN_A, "PROD": CONN_B}, "semantic_model_name": "sales"},
+        "not an entry",
+    ]
+    fabric_repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": binding}))
+
+    assert list(collect(fabric_repo, "PROD")) == [CONN_B]
+
+
+# Non-mapping models entries are skipped, not a traceback.
+def test_non_mapping_model_entries_are_skipped(fabric_repo: FabricRepo) -> None:
+    binding = {"models": ["abc", {"semantic_model_name": "m", "connection_id": {"_ALL_": CONN_A}}]}
+    fabric_repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": binding}))
+
+    assert list(collect(fabric_repo, "DEV")) == [CONN_A]

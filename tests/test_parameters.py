@@ -225,3 +225,140 @@ def test_fabric_cicd_parameter_validation_runs(fabric_repo: FabricRepo) -> None:
 def test_invalid_yaml_parameter_file_fails(fabric_repo: FabricRepo) -> None:
     with pytest.raises(FabkitError, match="invalid YAML"):
         check(fabric_repo, "find_replace: [\n")
+
+
+def key_value_replace(**values: Any) -> str:
+    entry = {"find_key": "$.properties.server", "replace_value": values}
+    return yaml.safe_dump({"key_value_replace": [entry]}, sort_keys=False)
+
+
+def spark_pool(**names: str) -> str:
+    replace_value = {env: {"type": "Capacity", "name": name} for env, name in names.items()}
+    entry = {"instance_pool_id": GUID_A, "replace_value": replace_value}
+    return yaml.safe_dump({"spark_pool": [entry]}, sort_keys=False)
+
+
+# A PLACEHOLDER under a lowercase _all_ fails for the target: fabric-cicd matches _ALL_ in any case.
+def test_pending_under_lowercase_all_fails_for_target(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, "x")
+
+    findings = check(fabric_repo, find_replace("x", _all_="PLACEHOLDER"), target_environment="PROD")
+
+    assert_reported(findings.errors, "PLACEHOLDER", "would be deployed to PROD")
+
+
+# A PLACEHOLDER in key_value_replace or spark_pool fails for its target.
+@pytest.mark.parametrize("build", [key_value_replace, spark_pool])
+def test_pending_in_other_parameters_fails_for_target(fabric_repo: FabricRepo, build: Any) -> None:
+    findings = check(fabric_repo, build(DEV="dev", PROD="PLACEHOLDER"), target_environment="PROD")
+
+    assert_reported(findings.errors, "PLACEHOLDER", "would be deployed to PROD")
+
+
+# In validate, a PLACEHOLDER in key_value_replace or spark_pool warns.
+@pytest.mark.parametrize("build", [key_value_replace, spark_pool])
+def test_pending_in_other_parameters_warns_in_validate(fabric_repo: FabricRepo, build: Any) -> None:
+    findings = check(fabric_repo, build(DEV="dev", PROD="PLACEHOLDER"))
+
+    assert findings.errors == []
+    assert_reported(findings.warnings, "PLACEHOLDER", "PROD")
+
+
+# A missing environment key in key_value_replace or spark_pool fails.
+@pytest.mark.parametrize("build", [key_value_replace, spark_pool])
+def test_missing_environment_key_in_other_parameters_fails(
+    fabric_repo: FabricRepo, build: Any
+) -> None:
+    findings = check(fabric_repo, build(DEV="dev"))
+
+    assert_reported(findings.errors, "missing", "PROD")
+
+
+# A dynamic replace_value starting with $ is not shape-checked.
+def test_dynamic_replace_value_skips_shape_check(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, GUID_A)
+
+    findings = check(
+        fabric_repo, find_replace(GUID_A, DEV="$items.Lakehouse.lh.$id", PROD="$workspace.$id")
+    )
+
+    assert not any("shape" in e for e in findings.errors), findings.errors
+
+
+# A find_value starting with $ is not checked for a match.
+def test_dynamic_find_value_is_not_matched(fabric_repo: FabricRepo) -> None:
+    findings = check(fabric_repo, find_replace("$workspace.$id", DEV="a", PROD="b"))
+
+    assert not any("matches nothing" in e for e in findings.errors), findings.errors
+
+
+# With ignore_case, a find_value matches a file in another casing.
+def test_ignore_case_find_value_matches_any_casing(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, "server = 'abc'")
+    entry = {"find_value": "ABC", "ignore_case": "true", "replace_value": {"DEV": "a", "PROD": "b"}}
+
+    findings = check(fabric_repo, yaml.safe_dump({"find_replace": [entry]}))
+
+    assert not any("matches nothing" in e for e in findings.errors), findings.errors
+
+
+# is_regex "false" is not a regex: the find_value is still checked for a match.
+def test_is_regex_false_is_matched(fabric_repo: FabricRepo) -> None:
+    entry = {
+        "find_value": "nothing",
+        "is_regex": "false",
+        "replace_value": {"DEV": "a", "PROD": "b"},
+    }
+
+    findings = check(fabric_repo, yaml.safe_dump({"find_replace": [entry]}))
+
+    assert_reported(findings.errors, "matches nothing")
+
+
+# The legacy semantic_model_binding list passes.
+def test_legacy_model_binding_passes(fabric_repo: FabricRepo) -> None:
+    binding = [{"connection_id": GUID_A, "semantic_model_name": "sales"}]
+
+    findings = check(fabric_repo, yaml.safe_dump({"semantic_model_binding": binding}))
+
+    assert findings.errors == []
+
+
+# A PLACEHOLDER in a legacy binding mapping fails for its target.
+def test_pending_legacy_model_binding_fails_for_target(fabric_repo: FabricRepo) -> None:
+    binding = [
+        {"connection_id": {"DEV": GUID_A, "PROD": "PLACEHOLDER"}, "semantic_model_name": "sales"}
+    ]
+
+    findings = check(
+        fabric_repo, yaml.safe_dump({"semantic_model_binding": binding}), target_environment="PROD"
+    )
+
+    assert_reported(findings.errors, "semantic_model_binding[1] (sales)", "PLACEHOLDER")
+
+
+# A parameter file with another name is not counted as a match for its own find_values.
+def test_parameter_file_in_use_is_not_matched(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("config.yml", CONFIG.replace("src/parameter.yml", "src/parameter-prod.yml"))
+    fabric_repo.write("src/parameter-prod.yml", find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert_reported(findings.errors, "matches nothing")
+
+
+# A word that contains TODO is not a placeholder.
+def test_todo_inside_a_word_is_not_a_placeholder(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, "x")
+
+    findings = check(fabric_repo, find_replace("x", DEV="photodocs", PROD="y"))
+
+    assert not any("never filled in" in e for e in findings.errors), findings.errors
+
+
+# A parameter file that is not UTF-8 is a FabkitError, not a traceback.
+def test_non_utf8_parameter_file_fails(fabric_repo: FabricRepo) -> None:
+    (fabric_repo.root / "src/parameter.yml").write_bytes(b"find_replace: \x93x\x94\n")
+
+    with pytest.raises(FabkitError, match="invalid YAML"):
+        check_parameters(load_deploy_config(fabric_repo.config))

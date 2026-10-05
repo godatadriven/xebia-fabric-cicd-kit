@@ -43,3 +43,14 @@ def test_check_logical_ids_command_fails_on_duplicate(
         (tmp_path / item / ".platform").write_text('{"config": {"logicalId": "1"}}')
     monkeypatch.chdir(tmp_path)
     assert main(["check-logical-ids"]) == 1
+
+
+# An invalid --connection-variables regex is a usage error.
+def test_invalid_connection_variables_regex_is_usage_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["deploy", "--environment", "DEV", "--connection-variables", "("])
+
+    assert exit_info.value.code == 2
+    assert "--connection-variables" in capsys.readouterr().err

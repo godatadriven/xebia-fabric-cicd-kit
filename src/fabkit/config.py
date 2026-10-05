@@ -18,10 +18,19 @@ class DeployConfig:
     path: Path
     raw: dict[str, Any]
 
+    def section(self, name: str) -> dict[str, Any]:
+        """One top-level section of config.yml. A missing section is empty."""
+        value = self.raw.get(name)
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise FabkitError(f"{self.path.name}: {name} must be a mapping.")
+        return value
+
     @property
     def environments(self) -> list[str]:
         """Environment names: the keys of core.workspace or core.workspace_id."""
-        core = self.raw.get("core") or {}
+        core = self.section("core")
         for key in ("workspace", "workspace_id"):
             if isinstance(core.get(key), dict):
                 return [str(name) for name in core[key]]
@@ -32,7 +41,7 @@ class DeployConfig:
 
     def value(self, section: str, key: str, environment: str) -> Any:
         """One setting for one environment. A plain value applies to every environment."""
-        value = (self.raw.get(section) or {}).get(key)
+        value = self.section(section).get(key)
         return value.get(environment) if isinstance(value, dict) else value
 
     def repository_directory(self, environment: str) -> Path:
@@ -61,7 +70,7 @@ def load_deploy_config(path: Path) -> DeployConfig:
         raise FabkitError(f"Config file not found: {path}")
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as error:
+    except (yaml.YAMLError, UnicodeDecodeError) as error:
         raise FabkitError(f"{path.name}: invalid YAML.", [str(error)]) from error
     if not isinstance(raw, dict):
         raise FabkitError(f"{path.name}: expected a mapping at the top level.")
@@ -103,8 +112,7 @@ def _fabric_cicd_errors(config: DeployConfig, environments: list[str]) -> list[s
 
 def _unpublish_errors(config: DeployConfig, environments: list[str]) -> list[str]:
     """unpublish.skip must be set for every environment."""
-    unpublish = config.raw.get("unpublish")
-    skip = unpublish.get("skip") if isinstance(unpublish, dict) else None
+    skip = config.section("unpublish").get("skip")
     if isinstance(skip, bool):
         return []
     if isinstance(skip, dict):

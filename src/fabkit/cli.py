@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from importlib.metadata import version
 from pathlib import Path
@@ -28,6 +29,15 @@ def report(findings: Findings, what: str) -> int:
         return 1
     print(f"{what} passed.")
     return 0
+
+
+def check_regex(pattern: str) -> str:
+    """Return the pattern when it compiles; otherwise a usage error."""
+    try:
+        re.compile(pattern)
+    except re.error as error:
+        raise argparse.ArgumentTypeError(f"invalid regex {pattern!r}: {error}") from error
+    return pattern
 
 
 def run_validate(args: argparse.Namespace) -> int:
@@ -82,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument(
         "--connection-variables",
         default=DEFAULT_CONNECTION_VARIABLES,
+        type=check_regex,
         help="Regex for variable-library variables that hold connection IDs.",
     )
     deploy.add_argument(

@@ -37,6 +37,12 @@ def test_parse_upload_rejects_target_outside_files() -> None:
         parse_upload(f"lib/={LAKEHOUSE}:Tables/x")
 
 
+# A target with a .. segment is a usage error.
+def test_parse_upload_rejects_parent_segment() -> None:
+    with pytest.raises(argparse.ArgumentTypeError, match=r"\.\."):
+        parse_upload(f"lib/={LAKEHOUSE}:Files/../Tables/x")
+
+
 # A missing local path fails before anything is published.
 def test_check_uploads_names_missing_path(tmp_path: Path) -> None:
     with pytest.raises(FabkitError) as raised:

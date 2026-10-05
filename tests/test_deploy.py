@@ -293,3 +293,19 @@ def test_failed_result_status_fails_deploy(
     )
 
     assert main(["deploy", "--environment", "DEV"]) == 1
+
+
+# A duplicate logicalId fails the deploy before login.
+def test_duplicate_logical_id_blocks_deploy(
+    fabric_repo: FabricRepo, fabric: FakeFabric, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = fabric_repo.root / "src/nb.Notebook/.platform"
+    fabric_repo.write("src/other.Notebook/.platform", other.read_text())
+
+    def no_login() -> None:
+        raise AssertionError("must not log in")
+
+    monkeypatch.setattr(deploy, "_credential", no_login)
+
+    assert main(["deploy", "--environment", "DEV"]) == 1
+    assert fabric.deploys == []

@@ -75,7 +75,7 @@ fabkit validate
 fabkit validate --config deploy/config.yml --unmatched-find-value warning
 ```
 
-A value that cannot exist yet, such as the GUID of a production lakehouse that is not created, can be written as `PLACEHOLDER`. `validate` warns about it; `deploy` fails when it would reach the environment being deployed. This works in `find_replace` only: fabric-cicd rejects a `connection_id` that is not a GUID.
+A value that cannot exist yet, such as the GUID of a production lakehouse that is not created, can be written as `PLACEHOLDER`. `validate` warns about it; `deploy` fails when it would reach the environment being deployed. This works in `find_replace`, `key_value_replace` and `spark_pool`; fabric-cicd rejects a `connection_id` that is not a GUID.
 
 ### `fabkit deploy`
 
@@ -87,7 +87,7 @@ fabkit deploy --environment PROD
 
 In order, it:
 
-1. Runs the config and parameter checks for that environment, and checks that every upload source exists. Nothing is published when one fails.
+1. Runs the config, parameter, `logicalId` and value-set checks for that environment, and checks that every upload source exists. Nothing is published when one fails.
 2. Logs in with `DefaultAzureCredential`: the `azure/login` step in CI, or `az login` locally.
 3. Checks that every connection the deploy binds is visible to the service principal. This covers `semantic_model_binding` in `parameter.yml` and variable-library variables whose name matches `--connection-variables` (default `ConnectionID$`).
 4. Deploys with fabric-cicd's `deploy_with_config`. It fails on any fabric-cicd error and on the binding warnings fabric-cicd logs while reporting success.
@@ -130,6 +130,10 @@ The template repository has both workflows. A pull request runs `validate`:
 A push to `dev`, `preprod` or `main` deploys to the matching environment:
 
 ```yaml
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -159,6 +163,8 @@ jobs:
 ## Versioning
 
 Versions below 1.0 may change flags between minor releases. Pin an exact version and update it by hand: Dependabot updates the `uses:` pins, not the `fabkit` version in a `run:` command or a pre-commit `rev`.
+
+On Dependabot pull requests the canary has no access to environment secrets; run it by hand with workflow_dispatch on the Dependabot branch.
 
 ## License
 

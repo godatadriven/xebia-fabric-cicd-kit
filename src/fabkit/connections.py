@@ -12,6 +12,7 @@ import yaml
 
 from fabkit.config import DeployConfig
 from fabkit.errors import FabkitError
+from fabkit.parameters import ALL_ENVIRONMENTS_KEY, enumerate_mappings
 
 if TYPE_CHECKING:
     from azure.core.credentials import TokenCredential
@@ -23,9 +24,6 @@ HTTP_TIMEOUT_SECONDS = 30
 # Variable-library variables whose name matches this hold connection IDs
 DEFAULT_CONNECTION_VARIABLES = "ConnectionID$"
 
-# fabric-cicd's key for "same value in every environment"
-ALL_ENVIRONMENTS_KEY = "_ALL_"
-
 
 def collect_connection_ids(
     config: DeployConfig, environment: str, connection_variables: str
@@ -36,6 +34,9 @@ def collect_connection_ids(
     if parameter_file is not None and parameter_file.is_file():
         for cid, source in _semantic_model_ids(parameter_file, environment):
             found.setdefault(cid, []).append(source)
+    item_types = config.item_types(environment)
+    if item_types is not None and "VariableLibrary" not in item_types:
+        return found
     pattern = re.compile(connection_variables)
     for cid, source in _variable_library_ids(
         config.repository_directory(environment), environment, pattern
@@ -68,21 +69,26 @@ def _environment_value(block: dict[str, Any], environment: str) -> Any:
 
 
 def _semantic_model_ids(parameter_file: Path, environment: str) -> list[tuple[str, str]]:
-    parameters = _read_yaml(parameter_file) or {}
-    binding = parameters.get("semantic_model_binding") or {}
-    blocks: list[tuple[str, dict[str, Any]]] = []
-    default = binding.get("default") or {}
-    if isinstance(default.get("connection_id"), dict):
-        blocks.append(("semantic_model_binding.default", default["connection_id"]))
-    for model in binding.get("models") or []:
-        if isinstance(model.get("connection_id"), dict):
+    parameters = _read_yaml(parameter_file)
+    binding = parameters.get("semantic_model_binding") if isinstance(parameters, dict) else None
+    blocks: list[tuple[str, Any]] = []
+    if isinstance(binding, list):
+        for index, entry in enumerate_mappings(binding):
+            name = entry.get("semantic_model_name", "<unnamed>")
+            blocks.append((f"semantic_model_binding[{index}] ({name})", entry.get("connection_id")))
+    elif isinstance(binding, dict):
+        default = binding.get("default")
+        if isinstance(default, dict):
+            blocks.append(("semantic_model_binding.default", default.get("connection_id")))
+        for _, model in enumerate_mappings(binding.get("models")):
             name = model.get("semantic_model_name", "<unnamed>")
-            blocks.append((f"semantic_model_binding.models ({name})", model["connection_id"]))
+            blocks.append((f"semantic_model_binding.models ({name})", model.get("connection_id")))
 
     found = []
     for source, block in blocks:
-        raw = _environment_value(block, environment)
-        if raw is None:
+        # A string connection_id applies to every environment
+        raw = _environment_value(block, environment) if isinstance(block, dict) else block
+        if not raw:
             continue
         for item in raw if isinstance(raw, list) else [raw]:
             found.append((str(item), f"{parameter_file.name}: {source}"))
