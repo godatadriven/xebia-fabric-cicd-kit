@@ -8,7 +8,7 @@ Use it in multi-repo setups that need standardized CI/CD across deployments.
 
 It extends item validation with custom checks, pre-commit hooks and extensions to fabric-cicd.
 
-To onboard, start a new Fabric repository from the [template repository](https://github.com/godatadriven/xebia-fabric-cicd-template).
+To onboard, start a new Fabric repository from the [template](templates/fabric-repo/).
 
 At the moment, GitHub is the only supported platform.
 
@@ -38,7 +38,7 @@ Checks fabkit adds to fabric-cicd:
 
 ## Getting started
 
-Start a new repository from the [template](https://github.com/godatadriven/xebia-fabric-cicd-template), or install the command in an existing one:
+Start a new repository by copying the [template](templates/fabric-repo/) (its README has the commands), or install the command in an existing one:
 
 ```bash
 uvx --from xebia-fabric-cicd-kit==0.1.0 fabkit validate
@@ -121,7 +121,7 @@ Pin an exact tag: pre-commit caches the hook per `rev`.
 
 ## GitHub Actions
 
-The template repository has both workflows. A pull request runs `validate`:
+The [template](templates/fabric-repo/) has both workflows. A pull request runs `validate`:
 
 ```yaml
 - run: uvx --from xebia-fabric-cicd-kit==0.1.0 fabkit validate
@@ -162,7 +162,7 @@ jobs:
 
 ## Versioning
 
-Versions below 1.0 may change flags between minor releases. Pin an exact version and update it by hand: Dependabot updates the `uses:` pins, not the `fabkit` version in a `run:` command or a pre-commit `rev`.
+Versions below 1.0 may change flags between minor releases. Pin an exact version and update it by hand, in the workflow `run:` commands and the pre-commit `rev`.
 
 On Dependabot pull requests the canary has no access to environment secrets; run it by hand with workflow_dispatch on the Dependabot branch.
 

@@ -33,3 +33,6 @@ jobs:
         run: uv run mypy src
       - name: Tests with coverage
         run: uv run pytest -q --cov
+      - name: Template passes validate
+        working-directory: templates/fabric-repo
+        run: uv run --project ../.. fabkit validate

@@ -1,0 +1,4 @@
+.venv/
+__pycache__/
+fabric_cicd.error.log
+.DS_Store

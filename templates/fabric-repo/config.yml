@@ -1,0 +1,10 @@
+core:
+  workspace:
+    DEV: "<workspace name> [dev]"
+    PREPROD: "<workspace name> [preprod]"
+    PROD: "<workspace name> [prod]"
+  repository_directory: src
+  parameter: src/parameter.yml
+  item_types_in_scope: [Notebook, DataPipeline, VariableLibrary, Environment]
+unpublish:
+  skip: false

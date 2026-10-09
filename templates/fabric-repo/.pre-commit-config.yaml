@@ -1,0 +1,6 @@
+repos:
+  - repo: https://github.com/godatadriven/xebia-fabric-cicd-kit
+    rev: v0.1.0
+    hooks:
+      - id: fabkit-logical-ids
+      - id: fabkit-value-sets
