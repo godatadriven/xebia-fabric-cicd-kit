@@ -19,7 +19,7 @@ fabkit is built around fabric-cicd's config-based deploy, `deploy_with_config`. 
 fabkit has two commands:
 
 - `fabkit validate` checks the repository files for every environment, without logging in to Fabric. Use it as the pull request check.
-- `fabkit deploy` runs the same checks for one environment, verifies the connections against Fabric, calls `deploy_with_config`, and fails on the warnings fabric-cicd logs while reporting success.
+- `fabkit deploy` runs the same checks for one environment, verifies the connections against Fabric, calls `deploy_with_config`, and fails on the binding and value-set warnings fabric-cicd logs while reporting success.
 
 Checks fabkit adds to fabric-cicd:
 
@@ -33,8 +33,11 @@ Checks fabkit adds to fabric-cicd:
 | `parameter.yml` that `config.yml` does not reference | Ignores the file | `validate` fails |
 | Two items with the same `logicalId` | One overwrites the other | `validate` fails |
 | VariableLibrary override with keys other than `name` and `value` | Fabric rejects the library at publish | `validate` fails |
+| VariableLibrary without a value set for an environment | Activates the default value set | `validate` fails; add an empty value set to keep the defaults |
+| `semantic_model_binding` to a model that is not in the repository | Skips the binding | `validate` fails |
+| Error logged while validating `parameter.yml`, e.g. an unknown `item_type` | Skips the replacement | `validate` fails |
 | Connection ID the service principal cannot see | Publishes the item unbound and reports success | `deploy` stops before publishing |
-| Binding warning during the deploy | Reports success | `deploy` fails |
+| Binding or value-set warning during the deploy | Reports success | `deploy` fails |
 | Semantic model owned by someone other than the deploy identity | `semantic_model_binding` fails: only the owner can bind | `deploy --take-over-semantic-models` makes the deploy identity owner first |
 
 ## Getting started
@@ -78,6 +81,8 @@ fabkit validate --config deploy/config.yml --unmatched-find-value warning
 
 A value that cannot exist yet, such as the GUID of a production lakehouse that is not created, can be written as `PLACEHOLDER`. `validate` warns about it; `deploy` fails when it would reach the environment being deployed. This works in `find_replace`, `key_value_replace` and `spark_pool`; fabric-cicd rejects a `connection_id` that is not a GUID.
 
+A `$ENV:` value needs its environment variable only in the deploy of its own environment. `validate` runs without it, and applies the `features` in `config.yml` as fabric-cicd's deploy does.
+
 ### `fabkit deploy`
 
 Deploys one environment:
@@ -92,7 +97,7 @@ In order, it:
 2. Logs in with `DefaultAzureCredential`: the `azure/login` step in CI, or `az login` locally.
 3. Checks that every connection the deploy binds is visible to the service principal. This covers `semantic_model_binding` in `parameter.yml` and variable-library variables whose name matches `--connection-variables` (default `ConnectionID$`).
 4. With `--take-over-semantic-models`, makes the deploy identity owner of the repository's semantic models. See [Semantic model takeover](#semantic-model-takeover).
-5. Deploys with fabric-cicd's `deploy_with_config`. It fails on any fabric-cicd error and on the binding warnings fabric-cicd logs while reporting success.
+5. Deploys with fabric-cicd's `deploy_with_config`. It fails on any fabric-cicd error and on the binding and value-set warnings fabric-cicd logs while reporting success.
 6. Runs the uploads, unless the deploy failed.
 
 Set `RUNNER_DEBUG=1` for fabric-cicd's debug logging; GitHub sets it on a debug re-run.

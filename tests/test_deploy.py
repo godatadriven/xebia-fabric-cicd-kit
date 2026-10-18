@@ -370,3 +370,13 @@ def test_failed_takeover_does_not_fail_deploy(
     assert code == 0
     assert takeover_calls == ["deploy"]
     assert "warning: Semantic model sales: takeover failed" in capsys.readouterr().err
+
+
+# An environment without a value set fails the deploy before publishing.
+def test_missing_value_set_blocks_deploy(fabric_repo: FabricRepo, fabric: FakeFabric) -> None:
+    fabric_repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, VariableLibrary]"))
+    fabric_repo.write("src/vars.VariableLibrary/variables.json", '{"variables": []}')
+    fabric_repo.write("src/vars.VariableLibrary/settings.json", '{"valueSetsOrder": ["DEV"]}')
+
+    assert main(["deploy", "--environment", "DEV"]) == 1
+    assert fabric.deploys == []

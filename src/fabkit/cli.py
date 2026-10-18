@@ -15,7 +15,7 @@ from fabkit.errors import FabkitError, Findings
 from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
 from fabkit.uploads import parse_upload
-from fabkit.value_sets import check_value_sets
+from fabkit.value_sets import check_value_set_environments, check_value_sets
 
 
 def report(findings: Findings, what: str) -> int:
@@ -48,6 +48,7 @@ def run_validate(args: argparse.Namespace) -> int:
         findings.extend(check_parameters(config, unmatched_find_value=args.unmatched_find_value))
     findings.extend(check_logical_ids(Path.cwd()))
     findings.extend(check_value_sets(Path.cwd()))
+    findings.extend(check_value_set_environments(config))
     return report(findings, "Validation")
 
 

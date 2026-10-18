@@ -1,3 +1,5 @@
+import json
+import os
 from typing import Any
 
 import pytest
@@ -204,6 +206,45 @@ def test_pending_model_binding_fails_for_target(fabric_repo: FabricRepo) -> None
     assert_reported(findings.errors, "models[1] (sales)", "PLACEHOLDER")
 
 
+def binding(name: str, legacy: bool) -> str:
+    """semantic_model_binding text for one model, in the legacy list or the current format."""
+    if legacy:
+        return yaml.safe_dump(
+            {"semantic_model_binding": [{"semantic_model_name": name, "connection_id": GUID_A}]}
+        )
+    models = [{"semantic_model_name": name, "connection_id": {"DEV": GUID_A, "PROD": GUID_B}}]
+    return yaml.safe_dump({"semantic_model_binding": {"models": models}})
+
+
+def with_semantic_model(repo: FabricRepo, name: str) -> None:
+    repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]"))
+    platform = {
+        "metadata": {"type": "SemanticModel", "displayName": name},
+        "config": {"version": "2.0", "logicalId": "33333333-3333-3333-3333-333333333333"},
+    }
+    repo.write(f"src/{name}.SemanticModel/.platform", json.dumps(platform))
+
+
+# A binding to a semantic model that is not in the repository fails.
+@pytest.mark.parametrize("legacy", [False, True])
+def test_binding_to_unknown_model_fails(fabric_repo: FabricRepo, legacy: bool) -> None:
+    with_semantic_model(fabric_repo, "sales")
+
+    findings = check(fabric_repo, binding("salse", legacy))
+
+    assert_reported(findings.errors, "'salse'", "not in the repository")
+
+
+# A binding to a semantic model in the repository passes.
+@pytest.mark.parametrize("legacy", [False, True])
+def test_binding_to_known_model_passes(fabric_repo: FabricRepo, legacy: bool) -> None:
+    with_semantic_model(fabric_repo, "sales")
+
+    findings = check(fabric_repo, binding("sales", legacy))
+
+    assert findings.errors == []
+
+
 # No parameter file configured means nothing to check.
 def test_no_parameter_file_passes(fabric_repo: FabricRepo) -> None:
     (fabric_repo.root / "src/parameter.yml").unlink()
@@ -219,6 +260,17 @@ def test_fabric_cicd_parameter_validation_runs(fabric_repo: FabricRepo) -> None:
     findings = check(fabric_repo, find_replace(None, DEV="a", PROD="b"))
 
     assert_reported(findings.errors, "fabric-cicd rejected")
+
+
+# An error fabric-cicd logs while still passing the file fails validation.
+def test_fabric_cicd_logged_error_fails(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, GUID_A)
+    parameters = yaml.safe_load(find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
+    parameters["find_replace"][0]["item_type"] = "NotAType"
+
+    findings = check(fabric_repo, yaml.safe_dump(parameters))
+
+    assert_reported(findings.errors, "PROD", "Item type 'NotAType' not in scope")
 
 
 # A parameter.yml with invalid YAML is a FabkitError, not a traceback.
@@ -362,3 +414,72 @@ def test_non_utf8_parameter_file_fails(fabric_repo: FabricRepo) -> None:
 
     with pytest.raises(FabkitError, match="invalid YAML"):
         check_parameters(load_deploy_config(fabric_repo.config))
+
+
+ENV_FLAG = "features: [enable_environment_variable_replacement]\n"
+
+
+def env_reference(repo: FabricRepo, monkeypatch: pytest.MonkeyPatch, flag: bool = True) -> None:
+    """A PROD value read from $ENV:PROD_LAKEHOUSE_ID, with the variable unset."""
+    repo.write("config.yml", CONFIG + (ENV_FLAG if flag else ""))
+    notebook_with(repo, GUID_A)
+    repo.write("src/parameter.yml", find_replace(GUID_A, DEV=GUID_A, PROD="$ENV:PROD_LAKEHOUSE_ID"))
+    monkeypatch.delenv("PROD_LAKEHOUSE_ID", raising=False)
+
+
+# An $ENV: value passes validate when its variable is not set, and no variable is left behind.
+def test_env_reference_passes_validate(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert findings.errors == []
+    assert "PROD_LAKEHOUSE_ID" not in os.environ
+
+
+# An $ENV: value without the feature flag in config.yml fails.
+def test_env_reference_without_flag_fails(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch, flag=False)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert_reported(findings.errors, "enable_environment_variable_replacement")
+
+
+# An $ENV: value for the deploy target fails when its variable is not set.
+def test_unset_env_reference_fails_for_target(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
+
+    assert_reported(findings.errors, "for PROD", "could not be resolved")
+    assert not any("for DEV" in e for e in findings.errors), findings.errors
+
+
+# An $ENV: value for the deploy target passes when its variable is set.
+def test_set_env_reference_passes_for_target(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+    monkeypatch.setenv("PROD_LAKEHOUSE_ID", GUID_B)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
+
+    assert findings.errors == []
+
+
+# An unset $ENV: value for another environment does not block the deploy.
+def test_unset_env_reference_passes_for_other_target(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="DEV")
+
+    assert findings.errors == []

@@ -32,3 +32,19 @@ def check_logical_ids(root: Path) -> Findings:
             listed = ", ".join(str(p) for p in paths)
             errors.append(f"logicalId {logical_id} is used by {listed}.")
     return Findings(errors=errors)
+
+
+def item_names(root: Path, item_type: str) -> set[str]:
+    """Display names of the items of one type under root. Unreadable files are skipped."""
+    names = set()
+    for path in root.rglob(".platform"):
+        try:
+            content = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        metadata = content.get("metadata") if isinstance(content, dict) else None
+        if not isinstance(metadata, dict) or metadata.get("type") != item_type:
+            continue
+        if isinstance(metadata.get("displayName"), str):
+            names.add(metadata["displayName"])
+    return names
