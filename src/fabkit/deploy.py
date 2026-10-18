@@ -13,6 +13,7 @@ from fabkit.connections import FABRIC_API_ROOT, FABRIC_SCOPE, get_json, verify_c
 from fabkit.errors import FabkitError, Findings
 from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
+from fabkit.takeover import take_over_semantic_models
 from fabkit.uploads import Upload, check_uploads, onelake_client, run_uploads
 from fabkit.value_sets import check_value_sets
 from fabkit.warnings import collect_fatal_logs
@@ -85,6 +86,16 @@ def run_deploy(args: argparse.Namespace) -> int:
         print("Connection check skipped (--skip-connection-check).")
     else:
         verify_connections(credential, config, environment, args.connection_variables)
+
+    if args.take_over_semantic_models:
+        _print_warnings(
+            take_over_semantic_models(
+                credential,
+                config,
+                environment,
+                lambda: resolve_workspace_id(credential, config, environment),
+            )
+        )
 
     with collect_fatal_logs() as collected:
         try:

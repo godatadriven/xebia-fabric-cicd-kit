@@ -35,6 +35,7 @@ Checks fabkit adds to fabric-cicd:
 | VariableLibrary override with keys other than `name` and `value` | Fabric rejects the library at publish | `validate` fails |
 | Connection ID the service principal cannot see | Publishes the item unbound and reports success | `deploy` stops before publishing |
 | Binding warning during the deploy | Reports success | `deploy` fails |
+| Semantic model owned by someone other than the deploy identity | `semantic_model_binding` fails: only the owner can bind | `deploy --take-over-semantic-models` makes the deploy identity owner first |
 
 ## Getting started
 
@@ -90,8 +91,9 @@ In order, it:
 1. Runs the config, parameter, `logicalId` and value-set checks for that environment, and checks that every upload source exists. Nothing is published when one fails.
 2. Logs in with `DefaultAzureCredential`: the `azure/login` step in CI, or `az login` locally.
 3. Checks that every connection the deploy binds is visible to the service principal. This covers `semantic_model_binding` in `parameter.yml` and variable-library variables whose name matches `--connection-variables` (default `ConnectionID$`).
-4. Deploys with fabric-cicd's `deploy_with_config`. It fails on any fabric-cicd error and on the binding warnings fabric-cicd logs while reporting success.
-5. Runs the uploads, unless the deploy failed.
+4. With `--take-over-semantic-models`, makes the deploy identity owner of the repository's semantic models. See [Semantic model takeover](#semantic-model-takeover).
+5. Deploys with fabric-cicd's `deploy_with_config`. It fails on any fabric-cicd error and on the binding warnings fabric-cicd logs while reporting success.
+6. Runs the uploads, unless the deploy failed.
 
 Set `RUNNER_DEBUG=1` for fabric-cicd's debug logging; GitHub sets it on a debug re-run.
 
@@ -104,6 +106,18 @@ fabkit deploy --environment PROD --upload "lib/=<lakehouse GUID>:Files/_lib/lib/
 ```
 
 The lakehouse is given by its GUID; the workspace is the one being deployed. `__pycache__` folders are skipped. Uploads overwrite files but never delete: a file removed from the local folder stays in the lakehouse.
+
+### Semantic model takeover
+
+Only the owner of a semantic model can bind its connection. A model that someone took over in the portal is owned by that person, and fabric-cicd's `semantic_model_binding` then fails with "you are not the owner of the semantic model". `--take-over-semantic-models` makes the deploy identity the owner again before publishing:
+
+```bash
+fabkit deploy --environment PROD --take-over-semantic-models
+```
+
+It covers the semantic models in the repository, matched to the workspace by the `displayName` in `.platform`. Models not yet in the workspace are skipped, and so are models that `publish.skip`, `publish.exclude_regex` or `publish.items_to_include` keep from publishing. With `publish.folder_exclude_regex` or `publish.folder_path_to_include` set, nothing is taken over and a warning says so. A failed takeover prints a warning and the deploy continues.
+
+The deploy identity needs Member or Admin on the workspace, and the tenant setting that lets service principals use Power BI APIs. Other item types have no generally available takeover API.
 
 ## Pre-commit hooks
 

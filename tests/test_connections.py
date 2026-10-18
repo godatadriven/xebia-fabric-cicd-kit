@@ -14,6 +14,7 @@ from fabkit.connections import (
     DEFAULT_CONNECTION_VARIABLES,
     collect_connection_ids,
     get_json,
+    post_json,
     verify_connections,
 )
 from fabkit.errors import FabkitError
@@ -267,3 +268,47 @@ def test_non_mapping_model_entries_are_skipped(fabric_repo: FabricRepo) -> None:
     fabric_repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": binding}))
 
     assert list(collect(fabric_repo, "DEV")) == [CONN_A]
+
+
+# A POST sends the JSON body with the bearer token.
+def test_post_json_sends_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[Any] = []
+
+    class Response(BytesIO):
+        def __enter__(self) -> "Response":
+            return self
+
+    def record(http_request: Any, **_: Any) -> Any:
+        sent.append(http_request)
+        return Response(b"")
+
+    monkeypatch.setattr(connections.request, "urlopen", record)
+
+    post_json("https://x", "token", {"a": 1})
+
+    assert sent[0].get_method() == "POST"
+    assert sent[0].data == b'{"a": 1}'
+    assert sent[0].get_header("Authorization") == "Bearer token"
+
+
+# An HTTP error from a POST becomes a FabkitError with the status and body.
+def test_post_json_http_error_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unauthorized(_request: Any, **_: Any) -> Any:
+        raise error.HTTPError("https://x", 401, "Unauthorized", {}, BytesIO(b"no access"))  # type: ignore[arg-type]
+
+    monkeypatch.setattr(connections.request, "urlopen", unauthorized)
+
+    with pytest.raises(FabkitError, match="POST https://x failed with HTTP 401") as raised:
+        post_json("https://x", "token", {})
+    assert raised.value.details == ["no access"]
+
+
+# A network failure on a POST becomes a FabkitError naming the URL.
+def test_post_json_network_error_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unreachable(_request: Any, **_: Any) -> Any:
+        raise error.URLError("connection reset")
+
+    monkeypatch.setattr(connections.request, "urlopen", unreachable)
+
+    with pytest.raises(FabkitError, match="POST https://x failed: .*connection reset"):
+        post_json("https://x", "token", {})

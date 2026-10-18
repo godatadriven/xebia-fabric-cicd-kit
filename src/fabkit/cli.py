@@ -100,6 +100,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the connection pre-flight. For testing fabkit itself.",
     )
+    deploy.add_argument(
+        "--take-over-semantic-models",
+        action="store_true",
+        help=(
+            "Make the deploy identity owner of the repository's semantic models before publishing."
+        ),
+    )
     deploy.set_defaults(func=run_deploy)
 
     return parser

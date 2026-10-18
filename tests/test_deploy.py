@@ -4,12 +4,12 @@ from typing import Any
 
 import pytest
 import yaml
-from helpers import CONFIG, FabricRepo, FakeCredential, FakeOneLake, find_replace
+from helpers import CONFIG, FabricRepo, FakeCredential, FakeOneLake, find_replace, platform_json
 
-from fabkit import connections, deploy
+from fabkit import connections, deploy, takeover
 from fabkit.cli import main
 from fabkit.config import load_deploy_config
-from fabkit.connections import FABRIC_API_ROOT
+from fabkit.connections import FABRIC_API_ROOT, POWER_BI_API_ROOT
 from fabkit.errors import FabkitError
 
 LAKEHOUSE = "cccccccc-0000-0000-0000-000000000003"
@@ -309,3 +309,64 @@ def test_duplicate_logical_id_blocks_deploy(
 
     assert main(["deploy", "--environment", "DEV"]) == 1
     assert fabric.deploys == []
+
+
+def add_semantic_model(repo: FabricRepo) -> None:
+    repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]"))
+    repo.write(
+        "src/sales.SemanticModel/.platform",
+        platform_json("SemanticModel", "sales", "a1111111-1111-1111-1111-111111111111"),
+    )
+
+
+@pytest.fixture
+def takeover_calls(fabric: FakeFabric, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Takeover POST URLs, recorded in order with the deploy calls as 'deploy'."""
+    calls: list[str] = []
+    items = {"value": [{"id": "sm-1", "displayName": "sales"}]}
+    monkeypatch.setattr(takeover, "get_json", lambda _url, _token: items)
+    monkeypatch.setattr(takeover, "post_json", lambda url, _token, _body: calls.append(url))
+    monkeypatch.setattr(deploy, "_deploy_with_config", lambda **_: calls.append("deploy"))
+    return calls
+
+
+# Without --take-over-semantic-models no takeover call is made.
+def test_takeover_off_by_default(fabric_repo: FabricRepo, takeover_calls: list[str]) -> None:
+    add_semantic_model(fabric_repo)
+
+    assert main(["deploy", "--environment", "DEV"]) == 0
+    assert takeover_calls == ["deploy"]
+
+
+# With --take-over-semantic-models the takeover runs before deploy_with_config.
+def test_takeover_runs_before_deploy(fabric_repo: FabricRepo, takeover_calls: list[str]) -> None:
+    add_semantic_model(fabric_repo)
+
+    code = main(["deploy", "--environment", "DEV", "--take-over-semantic-models"])
+
+    assert code == 0
+    assert takeover_calls == [
+        f"{POWER_BI_API_ROOT}/groups/ws-dev-guid/datasets/sm-1/Default.TakeOver",
+        "deploy",
+    ]
+
+
+# A failed takeover prints a warning and the deploy still succeeds.
+def test_failed_takeover_does_not_fail_deploy(
+    fabric_repo: FabricRepo,
+    takeover_calls: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    add_semantic_model(fabric_repo)
+
+    def refuse(url: str, _token: str, _body: dict[str, Any]) -> None:
+        raise FabkitError(f"POST {url} failed with HTTP 401.", ["no access"])
+
+    monkeypatch.setattr(takeover, "post_json", refuse)
+
+    code = main(["deploy", "--environment", "DEV", "--take-over-semantic-models"])
+
+    assert code == 0
+    assert takeover_calls == ["deploy"]
+    assert "warning: Semantic model sales: takeover failed" in capsys.readouterr().err

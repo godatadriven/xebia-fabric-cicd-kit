@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,16 @@ PLATFORM = """\
   "config": {"version": "2.0", "logicalId": "11111111-1111-1111-1111-111111111111"}
 }
 """
+
+
+def platform_json(item_type: str, display_name: str, logical_id: str) -> str:
+    """.platform text for one item."""
+    return json.dumps(
+        {
+            "metadata": {"type": item_type, "displayName": display_name},
+            "config": {"version": "2.0", "logicalId": logical_id},
+        }
+    )
 
 
 @dataclass
