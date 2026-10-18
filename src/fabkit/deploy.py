@@ -8,21 +8,16 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from fabkit.config import DeployConfig, check_config, load_deploy_config
-from fabkit.connections import FABRIC_API_ROOT, FABRIC_SCOPE, get_json, verify_connections
+from fabkit import workspaces
+from fabkit.config import DeployConfig, check_config, load_deploy_config, require_environment
+from fabkit.connections import verify_connections
 from fabkit.errors import FabkitError, Findings
 from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
 from fabkit.takeover import take_over_semantic_models
-from fabkit.uploads import Upload, check_uploads, onelake_client, run_uploads
+from fabkit.uploads import Upload, check_uploads, upload_all, upload_warnings
 from fabkit.value_sets import check_value_set_environments, check_value_sets
 from fabkit.warnings import collect_fatal_logs
-
-
-def _credential() -> Any:
-    from azure.identity import DefaultAzureCredential
-
-    return DefaultAzureCredential()
 
 
 def _deploy_with_config(**kwargs: Any) -> Any:
@@ -37,34 +32,11 @@ def _change_log_level(level: str) -> None:
     change_log_level(level)
 
 
-def resolve_workspace_id(credential: Any, config: DeployConfig, environment: str) -> str:
-    """The workspace GUID: core.workspace_id, or a lookup of core.workspace by name."""
-    workspace_id = config.value("core", "workspace_id", environment)
-    if workspace_id:
-        return str(workspace_id)
-    name = config.value("core", "workspace", environment)
-    token = credential.get_token(FABRIC_SCOPE).token
-    url: str | None = f"{FABRIC_API_ROOT}/workspaces"
-    while url:
-        body = get_json(url, token)
-        for workspace in body.get("value", []):
-            if workspace.get("displayName") == name:
-                return str(workspace["id"])
-        url = body.get("continuationUri") or None
-    raise FabkitError(
-        f"Workspace {name!r} not found, or the deploy service principal has no access."
-    )
-
-
 def run_deploy(args: argparse.Namespace) -> int:
     """Check, deploy and upload for one environment."""
     config = load_deploy_config(Path(args.config))
     environment: str = args.environment
-    if environment not in config.environments:
-        raise FabkitError(
-            f"Environment {environment!r} is not in {config.path.name}.",
-            [f"Known environments: {', '.join(config.environments)}"],
-        )
+    require_environment(config, environment)
 
     findings = check_config(config)
     if not findings.errors:
@@ -78,11 +50,13 @@ def run_deploy(args: argparse.Namespace) -> int:
 
     uploads: list[Upload] = args.upload or []
     check_uploads(uploads)
+    for upload in uploads:
+        _print_warnings(Findings(warnings=upload_warnings(upload)))
 
     if os.environ.get("RUNNER_DEBUG") == "1":
         _change_log_level("DEBUG")
 
-    credential = _credential()
+    credential = workspaces.default_credential()
     if args.skip_connection_check:
         print("Connection check skipped (--skip-connection-check).")
     else:
@@ -94,7 +68,7 @@ def run_deploy(args: argparse.Namespace) -> int:
                 credential,
                 config,
                 environment,
-                lambda: resolve_workspace_id(credential, config, environment),
+                lambda: workspaces.resolve_workspace_id(credential, config, environment),
             )
         )
 
@@ -110,7 +84,7 @@ def run_deploy(args: argparse.Namespace) -> int:
         _check_result(result)
 
         if uploads and not collected.messages:
-            _run_uploads(credential, config, environment, uploads)
+            _run_uploads(credential, config, environment, uploads, args.upload_replace_existing)
 
     if collected.messages:
         raise FabkitError("fabric-cicd logged problems that fail the deploy.", collected.messages)
@@ -134,13 +108,12 @@ def _check_result(result: Any) -> None:
 
 
 def _run_uploads(
-    credential: Any, config: DeployConfig, environment: str, uploads: list[Upload]
+    credential: Any,
+    config: DeployConfig,
+    environment: str,
+    uploads: list[Upload],
+    replace_existing: bool,
 ) -> None:
-    """Resolve the workspace and copy the uploads into it."""
-    try:
-        workspace_id = resolve_workspace_id(credential, config, environment)
-        run_uploads(onelake_client(credential), workspace_id, uploads)
-    except FabkitError:
-        raise
-    except Exception as error:  # Azure SDK errors vary; all of them fail the upload
-        raise FabkitError(f"Upload failed: {error}") from error
+    """Resolve the workspace and replace each upload's folder in it."""
+    workspace_id = workspaces.resolve_workspace_id(credential, config, environment)
+    upload_all(credential, workspace_id, uploads, replace_existing)

@@ -16,10 +16,11 @@ At the moment, GitHub is the only supported platform.
 
 fabkit is built around fabric-cicd's config-based deploy, `deploy_with_config`. The deployment settings stay in fabric-cicd's own `config.yml` (workspace per environment, repository directory, item types, publish and unpublish) and `parameter.yml`. fabkit has no config file of its own. Its few extra settings, such as uploads, are command flags in the workflow.
 
-fabkit has two commands:
+fabkit has three commands:
 
 - `fabkit validate` checks the repository files for every environment, without logging in to Fabric. Use it as the pull request check.
 - `fabkit deploy` runs the same checks for one environment, verifies the connections against Fabric, calls `deploy_with_config`, and fails on the binding and value-set warnings fabric-cicd logs while reporting success.
+- `fabkit upload` replaces a folder in a lakehouse with a local folder, such as a dbt project, without a Fabric deploy.
 
 Checks fabkit adds to fabric-cicd:
 
@@ -105,13 +106,43 @@ Set `RUNNER_DEBUG=1` for fabric-cicd's debug logging; GitHub sets it on a debug 
 
 ### Uploads
 
-For notebooks that import shared Python code from a lakehouse, `--upload` copies a local file or folder into a lakehouse's `Files/` after publishing:
+An upload replaces a folder in a lakehouse's `Files/` with a local file or folder. Notebooks then read it from there, for example shared Python code or a dbt project.
+
+`fabkit upload` does this on its own, for a repository without Fabric items, such as a dbt repository:
 
 ```bash
-fabkit deploy --environment PROD --upload "lib/=<lakehouse GUID>:Files/_lib/lib/"
+fabkit upload --environment PROD --lakehouse lh_landing --source dbt/ --target Files/dbt
 ```
 
-The lakehouse is given by its GUID; the workspace is the one being deployed. `__pycache__` folders are skipped. Uploads overwrite files but never delete: a file removed from the local folder stays in the lakehouse.
+`--upload` does the same after a deploy publishes:
+
+```bash
+fabkit deploy --environment PROD --upload "lib/=lh_landing:Files/_lib/lib/"
+```
+
+The lakehouse is given by name, or by GUID. A name is looked up in the environment's workspace from `config.yml`. `fabkit upload` needs only that workspace mapping, so a dbt repository's `config.yml` can be:
+
+```yaml
+core:
+  workspace:
+    DEV: "Sales [dev]"
+    PROD: "Sales [prod]"
+```
+
+The target folder ends up holding exactly the uploaded files; files removed from the local folder are removed from the lakehouse too. The files go to `<target>.staging` first, and two renames then swap it into place. A failed upload leaves the target folder untouched. A run that starts during the swap can find the folder missing for a moment, so don't schedule runs to overlap with uploads.
+
+Every upload writes a `.fabkit-upload` file into its folder. A folder that has files but no `.fabkit-upload` is not replaced, so a wrong target can't delete data that fabkit did not upload. To replace such a folder once, for example one filled by an older fabkit version, pass `--replace-existing` to `fabkit upload` or `--upload-replace-existing` to `fabkit deploy`.
+
+`__pycache__` and `.git` folders are always left out. `--exclude` leaves out more: a glob over paths relative to the source, where a pattern that matches a folder leaves out everything in it. For a dbt project, a source with `dbt_project.yml`, `target`, `logs`, `profiles.yml` and `.user.yml` are left out as well. fabkit warns when a dbt project has `packages.yml` but no `dbt_packages/`: run `dbt deps` before the upload, or the runner needs network access to install the packages.
+
+A step in a dbt repository's workflow, after `dbt deps` and a green `dbt build`:
+
+```yaml
+- name: Upload the dbt project
+  env:
+    ENVIRONMENT: ${{ github.ref_name == 'main' && 'PROD' || 'DEV' }}
+  run: uvx --from xebia-fabric-cicd-kit==0.1.0 fabkit upload --environment "${ENVIRONMENT}" --lakehouse lh_landing --source dbt/ --target Files/dbt
+```
 
 ### Semantic model takeover
 

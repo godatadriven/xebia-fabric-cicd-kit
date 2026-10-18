@@ -14,7 +14,7 @@ from fabkit.deploy import run_deploy
 from fabkit.errors import FabkitError, Findings
 from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
-from fabkit.uploads import parse_upload
+from fabkit.uploads import check_target, parse_upload, run_upload
 from fabkit.value_sets import check_value_set_environments, check_value_sets
 
 
@@ -87,8 +87,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--upload",
         action="append",
         type=parse_upload,
-        metavar="LOCAL=LAKEHOUSE_ID:FILES_PATH",
-        help="Copy a local file or folder into a lakehouse after publishing. Repeatable.",
+        metavar="LOCAL=LAKEHOUSE:FILES_PATH",
+        help="Replace a lakehouse folder with a local folder after publishing. Repeatable.",
+    )
+    deploy.add_argument(
+        "--upload-replace-existing",
+        action="store_true",
+        help="Let uploads replace folders with files that fabkit did not upload.",
     )
     deploy.add_argument(
         "--connection-variables",
@@ -109,6 +114,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     deploy.set_defaults(func=run_deploy)
+
+    upload = subparsers.add_parser(
+        "upload", help="Replace a lakehouse folder with a local folder. No Fabric deploy."
+    )
+    upload.add_argument("--environment", required=True, help="Environment key in config.yml.")
+    upload.add_argument("--config", default="config.yml", help="fabric-cicd config file.")
+    upload.add_argument(
+        "--lakehouse", required=True, help="Lakehouse name or GUID in the workspace."
+    )
+    upload.add_argument("--source", required=True, help="Local folder or file to upload.")
+    upload.add_argument(
+        "--target",
+        required=True,
+        type=lambda target: check_target(target, "--target"),
+        help="Folder under Files/ that the upload replaces.",
+    )
+    upload.add_argument(
+        "--exclude",
+        action="append",
+        metavar="PATTERN",
+        help="Glob of paths, relative to the source, to leave out. Repeatable.",
+    )
+    upload.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="Replace the target folder even when it has files that fabkit did not upload.",
+    )
+    upload.set_defaults(func=run_upload)
 
     return parser
 

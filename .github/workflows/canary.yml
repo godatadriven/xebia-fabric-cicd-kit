@@ -43,7 +43,14 @@ jobs:
         run: ./capacity.sh resume
 
       - name: Publish and upload
-        run: uv run --project .. fabkit deploy --environment CANARY --upload "lib/=${LAKEHOUSE_ID}:Files/_canary/lib/"
+        run: uv run --project .. fabkit deploy --environment CANARY --upload "lib/=${LAKEHOUSE_ID}:Files/_canary/deploy_upload/"
+
+      # The second run replaces an existing folder
+      - name: Upload without a deploy
+        run: |
+          for _ in 1 2; do
+            uv run --project .. fabkit upload --environment CANARY --lakehouse "${LAKEHOUSE_ID}" --source lib --target Files/_canary/upload
+          done
 
       - name: Unresolvable connection stops the deploy
         run: |
