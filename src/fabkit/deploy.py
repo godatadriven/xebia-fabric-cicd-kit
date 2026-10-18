@@ -15,7 +15,7 @@ from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
 from fabkit.takeover import take_over_semantic_models
 from fabkit.uploads import Upload, check_uploads, onelake_client, run_uploads
-from fabkit.value_sets import check_value_sets
+from fabkit.value_sets import check_value_set_environments, check_value_sets
 from fabkit.warnings import collect_fatal_logs
 
 
@@ -71,6 +71,7 @@ def run_deploy(args: argparse.Namespace) -> int:
         findings.extend(check_parameters(config, target_environment=environment))
     findings.extend(check_logical_ids(Path.cwd()))
     findings.extend(check_value_sets(Path.cwd()))
+    findings.extend(check_value_set_environments(config))
     if findings.errors:
         raise FabkitError("Checks failed. Nothing was published.", findings.errors)
     _print_warnings(findings)

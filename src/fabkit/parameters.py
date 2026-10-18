@@ -10,6 +10,8 @@ import yaml
 
 from fabkit.config import DeployConfig
 from fabkit.errors import FabkitError, Findings
+from fabkit.platform_files import item_names
+from fabkit.warnings import collect_fatal_logs
 
 # fabric-cicd's key for "same value in every environment"
 ALL_ENVIRONMENTS_KEY = "_ALL_"
@@ -64,6 +66,8 @@ def check_parameters(
         findings.errors.extend(
             _fabric_cicd_errors(config, parameter_file, repository_directory, environments)
         )
+        if any(_semantic_models_in_scope(config, name) for name in environments):
+            findings.errors.extend(_unknown_model_errors(parameters, repository_directory))
         for block in blocks:
             findings.errors.extend(_environment_key_errors(block, environments))
             findings.errors.extend(_placeholder_errors(block))
@@ -83,6 +87,34 @@ def check_parameters(
         else:
             findings.warnings.extend(unmatched)
     return findings
+
+
+def _semantic_models_in_scope(config: DeployConfig, environment: str) -> bool:
+    item_types = config.item_types(environment)
+    return item_types is None or "SemanticModel" in item_types
+
+
+def _unknown_model_errors(parameters: dict[str, Any], repository_directory: Path) -> list[str]:
+    """Bindings to semantic models that are not in the repository. fabric-cicd skips them."""
+    binding = parameters.get("semantic_model_binding")
+    if isinstance(binding, dict):
+        entries = [
+            (f"semantic_model_binding.models[{i}]", e)
+            for i, e in enumerate_mappings(binding.get("models"))
+        ]
+    else:
+        entries = [(f"semantic_model_binding[{i}]", e) for i, e in enumerate_mappings(binding)]
+    known = item_names(repository_directory, "SemanticModel")
+    errors = []
+    for where, entry in entries:
+        names = entry.get("semantic_model_name")
+        for name in names if isinstance(names, list) else [names]:
+            if isinstance(name, str) and name not in known:
+                errors.append(
+                    f"{where}: semantic model {name!r} is not in the repository under "
+                    f"{repository_directory.name}/. The binding is skipped."
+                )
+    return errors
 
 
 def _files_by_environment(config: DeployConfig) -> dict[Path, list[str]]:
@@ -341,23 +373,26 @@ def _fabric_cicd_errors(
 
     errors = []
     for environment in environments:
-        parameter = Parameter(
-            repository_directory=repository_directory,
-            item_type_in_scope=config.item_types(environment) or list(ACCEPTED_ITEM_TYPES),
-            environment=environment,
-            parameter_file_path=str(parameter_file),
+        # fabric-cicd logs some errors and still passes the file; deploy fails on them
+        with collect_fatal_logs() as collected:
+            parameter = Parameter(
+                repository_directory=repository_directory,
+                item_type_in_scope=config.item_types(environment) or list(ACCEPTED_ITEM_TYPES),
+                environment=environment,
+                parameter_file_path=str(parameter_file),
+            )
+            try:
+                valid = parameter._validate_parameter_file()
+            except Exception as error:  # fabric-cicd's validator crashes on some malformed entries
+                errors.append(
+                    f"fabric-cicd could not validate {parameter_file.name} for {environment}: "
+                    f"{type(error).__name__}: {error}. Check the structure of every entry."
+                )
+                continue
+        errors.extend(
+            f"fabric-cicd, {parameter_file.name} for {environment}: {message}"
+            for message in collected.messages
         )
-        try:
-            valid = parameter._validate_parameter_file()
-        except Exception as error:  # fabric-cicd's validator crashes on some malformed entries
-            errors.append(
-                f"fabric-cicd could not validate {parameter_file.name} for {environment}: "
-                f"{type(error).__name__}: {error}. Check the structure of every entry."
-            )
-            continue
         if not valid:
-            errors.append(
-                f"fabric-cicd rejected {parameter_file.name} for {environment}; "
-                "its log above names the problem."
-            )
+            errors.append(f"fabric-cicd rejected {parameter_file.name} for {environment}.")
     return errors

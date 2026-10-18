@@ -1,7 +1,7 @@
 import inspect
 import logging
 
-from fabric_cicd._items import _semanticmodel
+from fabric_cicd._items import _semanticmodel, _variablelibrary
 
 from fabkit.warnings import FATAL_WARNING_PATTERNS, collect_fatal_logs
 
@@ -10,6 +10,12 @@ SAMPLES = (
     "Connection ID 'abc' not found for semantic model 'Sales'",
     "Unexpected connection_id type 'int'; expected str or list. Skipping.",
     "Skipping non-string connection_id list element: 3 (type 'int')",
+    "Failed to bind semantic model 'Sales' to connection 'abc'. Status code: 400",
+    "Semantic model 'Sales' specified in parameter.yml not found in repository",
+    "Invalid 'semantic_model_binding' type: str. Expected list or dict. Skipping semantic "
+    "model binding.",
+    "Provided target environment 'PROD' does not match any value sets.  Using 'Default value set'",
+    "settings.json file not found for item vars. Active value set not changed.",
 )
 
 
@@ -21,11 +27,16 @@ def test_patterns_match_samples() -> None:
 
 # The pinned fabric-cicd still contains every warning text the patterns rely on.
 def test_fabric_cicd_still_logs_these_texts() -> None:
-    source = inspect.getsource(_semanticmodel)
+    source = inspect.getsource(_semanticmodel) + inspect.getsource(_variablelibrary)
     for fragment in (
         "not found for semantic model",
         "Unexpected connection_id type",
         "Skipping non-string connection_id list element",
+        "Failed to bind semantic model",
+        "specified in parameter.yml not found in repository",
+        "Invalid 'semantic_model_binding' type",
+        "does not match any value sets",
+        "settings.json file not found for item",
     ):
         assert fragment in source, (
             f"fabric-cicd no longer logs {fragment!r}; update FATAL_WARNING_PATTERNS"

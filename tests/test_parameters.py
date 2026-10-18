@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import pytest
@@ -204,6 +205,45 @@ def test_pending_model_binding_fails_for_target(fabric_repo: FabricRepo) -> None
     assert_reported(findings.errors, "models[1] (sales)", "PLACEHOLDER")
 
 
+def binding(name: str, legacy: bool) -> str:
+    """semantic_model_binding text for one model, in the legacy list or the current format."""
+    if legacy:
+        return yaml.safe_dump(
+            {"semantic_model_binding": [{"semantic_model_name": name, "connection_id": GUID_A}]}
+        )
+    models = [{"semantic_model_name": name, "connection_id": {"DEV": GUID_A, "PROD": GUID_B}}]
+    return yaml.safe_dump({"semantic_model_binding": {"models": models}})
+
+
+def with_semantic_model(repo: FabricRepo, name: str) -> None:
+    repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]"))
+    platform = {
+        "metadata": {"type": "SemanticModel", "displayName": name},
+        "config": {"version": "2.0", "logicalId": "33333333-3333-3333-3333-333333333333"},
+    }
+    repo.write(f"src/{name}.SemanticModel/.platform", json.dumps(platform))
+
+
+# A binding to a semantic model that is not in the repository fails.
+@pytest.mark.parametrize("legacy", [False, True])
+def test_binding_to_unknown_model_fails(fabric_repo: FabricRepo, legacy: bool) -> None:
+    with_semantic_model(fabric_repo, "sales")
+
+    findings = check(fabric_repo, binding("salse", legacy))
+
+    assert_reported(findings.errors, "'salse'", "not in the repository")
+
+
+# A binding to a semantic model in the repository passes.
+@pytest.mark.parametrize("legacy", [False, True])
+def test_binding_to_known_model_passes(fabric_repo: FabricRepo, legacy: bool) -> None:
+    with_semantic_model(fabric_repo, "sales")
+
+    findings = check(fabric_repo, binding("sales", legacy))
+
+    assert findings.errors == []
+
+
 # No parameter file configured means nothing to check.
 def test_no_parameter_file_passes(fabric_repo: FabricRepo) -> None:
     (fabric_repo.root / "src/parameter.yml").unlink()
@@ -219,6 +259,17 @@ def test_fabric_cicd_parameter_validation_runs(fabric_repo: FabricRepo) -> None:
     findings = check(fabric_repo, find_replace(None, DEV="a", PROD="b"))
 
     assert_reported(findings.errors, "fabric-cicd rejected")
+
+
+# An error fabric-cicd logs while still passing the file fails validation.
+def test_fabric_cicd_logged_error_fails(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, GUID_A)
+    parameters = yaml.safe_load(find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
+    parameters["find_replace"][0]["item_type"] = "NotAType"
+
+    findings = check(fabric_repo, yaml.safe_dump(parameters))
+
+    assert_reported(findings.errors, "PROD", "Item type 'NotAType' not in scope")
 
 
 # A parameter.yml with invalid YAML is a FabkitError, not a traceback.
