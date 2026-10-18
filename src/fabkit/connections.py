@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 FABRIC_API_ROOT = "https://api.fabric.microsoft.com/v1"
 FABRIC_SCOPE = "https://api.fabric.microsoft.com/.default"
+POWER_BI_API_ROOT = "https://api.powerbi.com/v1.0/myorg"
+POWER_BI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
 HTTP_TIMEOUT_SECONDS = 30
 
 # Variable-library variables whose name matches this hold connection IDs
@@ -147,6 +149,26 @@ def get_json(url: str, token: str) -> dict[str, Any]:
         return json.loads(body) if body.strip() else {}
     except ValueError as problem:
         raise FabkitError(f"Unexpected response from {url}.", [str(problem)]) from problem
+
+
+def post_json(url: str, token: str, body: dict[str, Any]) -> None:
+    """One authenticated POST with a JSON body. The response body is ignored."""
+    http_request = request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    try:
+        with request.urlopen(http_request, timeout=HTTP_TIMEOUT_SECONDS):
+            pass
+    except error.HTTPError as http_error:
+        detail = http_error.read().decode("utf-8", errors="replace")
+        raise FabkitError(
+            f"POST {url} failed with HTTP {http_error.code}.", [detail]
+        ) from http_error
+    except OSError as network_error:
+        raise FabkitError(f"POST {url} failed: {network_error}.") from network_error
 
 
 def list_connections(credential: TokenCredential) -> dict[str, str]:
