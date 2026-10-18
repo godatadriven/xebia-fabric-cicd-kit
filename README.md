@@ -32,6 +32,7 @@ Checks fabkit adds to fabric-cicd:
 | Same value in every environment | Deploys it | `validate` fails; use `_ALL_` if intended |
 | `find_value` that matches no file its `item_type`, `item_name` or `file_path` filters select, in any environment | Replaces nothing | `validate` fails |
 | `parameter.yml` that `config.yml` does not reference | Ignores the file | `validate` fails |
+| Per-environment setting in `config.yml`, such as `item_types_in_scope` or `unpublish.exclude_regex`, that leaves out an environment | Ignores the setting there, e.g. deploys every item type | `validate` fails |
 | No items in scope while `unpublish.skip` is `false` | Removes every item of the types in scope from the workspace | `validate` fails |
 | Two items with the same `logicalId` | Fails at deploy, after login; allows a shared all-zero placeholder | `validate` fails |
 | Two items with the same type and name in different folders | Deploys only one of them | `validate` fails |
@@ -66,10 +67,11 @@ unpublish:
   skip: false
 ```
 
-On top of fabric-cicd's own rules, fabkit requires two things:
+On top of fabric-cicd's own rules, fabkit requires three things:
 
 - Every environment maps to a workspace (`core.workspace` or `core.workspace_id`). The keys are the environment names, and the GitHub Environments must use the same names.
 - `unpublish.skip` is set explicitly. With `false`, workspace items that are not in the repository are removed, which is also fabric-cicd's default. A repository with no items of the types in scope must use `true`.
+- A per-environment setting names every environment. This covers `features`, each of the `constants`, `core.item_types_in_scope` and every `publish` and `unpublish` setting.
 
 ## Usage
 
@@ -84,7 +86,9 @@ fabkit validate --config deploy/config.yml --unmatched-find-value warning
 
 A value that cannot exist yet, such as the GUID of a production lakehouse that is not created, can be written as `PLACEHOLDER`. `validate` warns about it; `deploy` fails when it would reach the environment being deployed. This works in `find_replace`, `key_value_replace` and `spark_pool`; fabric-cicd rejects a `connection_id` that is not a GUID.
 
-A `$ENV:` value needs its environment variable only in the deploy of its own environment. `validate` runs without it, and applies the `features` in `config.yml` as fabric-cicd's deploy does.
+A `$ENV:` value needs its environment variable only in the deploy of its own environment. `validate` runs without it, and applies the `features` in `config.yml` as fabric-cicd's deploy does. A `$ENV:` value in a `connection_id` is the exception: fabric-cicd checks the connection GUID of every environment, so each deploy needs the variables of all environments. Use one variable under `_ALL_` to avoid that.
+
+The checks also cover the templates listed under `extend` in `parameter.yml`.
 
 ### `fabkit deploy`
 

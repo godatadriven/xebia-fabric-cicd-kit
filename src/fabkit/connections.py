@@ -8,11 +8,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib import error, request
 
-import yaml
-
 from fabkit.config import DeployConfig
 from fabkit.errors import FabkitError
-from fabkit.parameters import ALL_ENVIRONMENTS_KEY, enumerate_mappings
+from fabkit.parameters import (
+    ALL_ENVIRONMENTS_KEY,
+    enumerate_mappings,
+    load_parameters,
+    resolve_env_references,
+)
 
 if TYPE_CHECKING:
     from azure.core.credentials import TokenCredential
@@ -35,7 +38,7 @@ def collect_connection_ids(
     parameter_file = config.parameter_file(environment)
     if parameter_file is not None and parameter_file.is_file():
         for cid, source in _semantic_model_ids(parameter_file, environment):
-            found.setdefault(cid, []).append(source)
+            found.setdefault(resolve_env_references(config, environment, cid), []).append(source)
     item_types = config.item_types(environment)
     if item_types is not None and "VariableLibrary" not in item_types:
         return found
@@ -45,13 +48,6 @@ def collect_connection_ids(
     ):
         found.setdefault(cid, []).append(source)
     return found
-
-
-def _read_yaml(path: Path) -> Any:
-    try:
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (yaml.YAMLError, UnicodeDecodeError) as problem:
-        raise FabkitError(f"{path.name}: invalid YAML.", [str(problem)]) from problem
 
 
 def _read_json(path: Path) -> Any:
@@ -71,8 +67,8 @@ def _environment_value(block: dict[str, Any], environment: str) -> Any:
 
 
 def _semantic_model_ids(parameter_file: Path, environment: str) -> list[tuple[str, str]]:
-    parameters = _read_yaml(parameter_file)
-    binding = parameters.get("semantic_model_binding") if isinstance(parameters, dict) else None
+    parameters = load_parameters(parameter_file)
+    binding = parameters.get("semantic_model_binding")
     blocks: list[tuple[str, Any]] = []
     if isinstance(binding, list):
         for index, entry in enumerate_mappings(binding):
