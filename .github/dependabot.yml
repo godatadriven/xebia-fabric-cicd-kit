@@ -1,7 +1,8 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: "/"
+    # The template's workflows are copied into new repositories
+    directories: ["/", "/templates/fabric-repo"]
     schedule:
       interval: weekly
     commit-message:

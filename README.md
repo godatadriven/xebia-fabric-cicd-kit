@@ -172,7 +172,7 @@ Pin an exact tag: pre-commit caches the hook per `rev`.
 
 ## GitHub Actions
 
-The [template](templates/fabric-repo/) has both workflows. A pull request runs `validate`:
+The [template](templates/fabric-repo/) has both workflows, which call its `Makefile`. Without the template, a pull request runs `validate`:
 
 ```yaml
 - run: uvx --from xebia-fabric-cicd-kit==0.1.0 fabkit validate
@@ -191,7 +191,9 @@ jobs:
     environment: ${{ github.ref_name == 'main' && 'PROD' || github.ref_name == 'preprod' && 'PREPROD' || 'DEV' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
       - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}

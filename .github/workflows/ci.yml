@@ -35,4 +35,5 @@ jobs:
         run: uv run pytest -q --cov
       - name: Template passes validate
         working-directory: templates/fabric-repo
-        run: uv run --project ../.. fabkit validate
+        # This commit's fabkit, not the released version the Makefile pins
+        run: make validate FABKIT="uv run --project ../.. fabkit"
