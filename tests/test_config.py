@@ -138,3 +138,19 @@ def test_empty_repository_reports_unpublishing_environments(fabric_repo: FabricR
 
     assert_reported(errors, "PROD", "no items")
     assert not any("DEV" in e for e in errors), errors
+
+
+# Two items with the same type and name fail: fabric-cicd deploys only one of them.
+def test_duplicate_item_name_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("src/archive/nb.Notebook/.platform", PLATFORM.replace("1111", "2222"))
+
+    assert_reported(config_errors(fabric_repo), "Notebook 'nb'", "archive/nb.Notebook")
+
+
+# The same name on items of different types passes.
+def test_same_name_different_type_passes(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, DataPipeline]"))
+    platform = PLATFORM.replace("1111", "2222").replace("Notebook", "DataPipeline")
+    fabric_repo.write("src/nb.DataPipeline/.platform", platform)
+
+    assert config_errors(fabric_repo) == []

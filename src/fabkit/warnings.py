@@ -8,7 +8,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 # fabric-cicd logs these at WARNING and reports success.
-# The item is left unbound, or a variable library runs on the wrong value set.
+# The item is left unbound, a variable library runs on the wrong value set,
+# or an item removed from the repository stays in the workspace.
 FATAL_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"Connection ID .* not found for semantic model", re.IGNORECASE),
     re.compile(r"Unexpected connection_id type", re.IGNORECASE),
@@ -18,6 +19,7 @@ FATAL_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"Invalid 'semantic_model_binding' type", re.IGNORECASE),
     re.compile(r"does not match any value sets", re.IGNORECASE),
     re.compile(r"settings\.json file not found for item", re.IGNORECASE),
+    re.compile(r"^Failed to unpublish ", re.IGNORECASE),
 )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections.abc import Iterator
@@ -69,16 +70,18 @@ def check_parameters(
     findings = Findings()
     for parameter_file, environments in _files_by_environment(config).items():
         parameters = _load(parameter_file)
-        repository_directory = config.repository_directory(environments[0])
         blocks = iter_environment_blocks(parameters)
 
         findings.errors.extend(
-            _fabric_cicd_errors(
-                config, parameter_file, repository_directory, environments, target_environment
-            )
+            _fabric_cicd_errors(config, parameter_file, environments, target_environment)
         )
-        if any(_semantic_models_in_scope(config, name) for name in environments):
-            findings.errors.extend(_unknown_model_errors(parameters, repository_directory))
+        unknown_models = [
+            error
+            for name in environments
+            if _semantic_models_in_scope(config, name)
+            for error in _unknown_model_errors(parameters, config.repository_directory(name))
+        ]
+        findings.errors.extend(dict.fromkeys(unknown_models))
         for block in blocks:
             findings.errors.extend(_environment_key_errors(block, environments))
             findings.errors.extend(_placeholder_errors(block))
@@ -90,9 +93,7 @@ def check_parameters(
             else:
                 findings.errors.extend(pending)
 
-        unmatched = _unmatched_find_values(
-            parameters, repository_directory, set(_files_by_environment(config))
-        )
+        unmatched = _unmatched_find_values(config, parameters, environments)
         if unmatched_find_value == "error":
             findings.errors.extend(unmatched)
         else:
@@ -139,9 +140,7 @@ def _files_by_environment(config: DeployConfig) -> dict[Path, list[str]]:
 
 
 def _load(parameter_file: Path) -> dict[str, Any]:
-    """Read the parameter file as a mapping."""
-    if not parameter_file.is_file():
-        raise FabkitError(f"Parameter file not found: {parameter_file}")
+    """Read the parameter file as a mapping. fabric-cicd's config check reports a missing file."""
     try:
         loaded = yaml.safe_load(parameter_file.read_text(encoding="utf-8")) or {}
     except (yaml.YAMLError, UnicodeDecodeError) as error:
@@ -228,14 +227,9 @@ def _is_pending(text: str) -> bool:
 
 
 def _environment_key_errors(block: EnvironmentBlock, environments: list[str]) -> list[str]:
-    """Every environment named exactly once, or _ALL_ alone."""
+    """Every environment named exactly once. fabric-cicd checks that _ALL_ stands alone."""
     keys = {str(key) for key in block.values}
     if ALL_ENVIRONMENTS_KEY in {key.upper() for key in keys}:
-        if len(keys) != 1:
-            return [
-                f"{block.description}: {ALL_ENVIRONMENTS_KEY!r} must be the only key, "
-                f"found {sorted(keys)}."
-            ]
         return []
 
     expected = set(environments)
@@ -324,44 +318,95 @@ def _pending_messages(block: EnvironmentBlock, target_environment: str | None) -
     return messages
 
 
+class ItemFile(NamedTuple):
+    """One text file of a Fabric item, as fabric-cicd's find_replace sees it."""
+
+    item_type: str
+    item_name: str
+    path: Path
+    text: str
+
+
+def _item_files(repository_directory: Path, item_types: list[str] | None) -> list[ItemFile]:
+    """The text files of every item in scope. fabric-cicd replaces values only in these."""
+    files = []
+    for platform_file in sorted(repository_directory.rglob(".platform")):
+        try:
+            content = json.loads(platform_file.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        metadata = content.get("metadata") if isinstance(content, dict) else None
+        if not isinstance(metadata, dict):
+            continue
+        item_type, item_name = metadata.get("type"), metadata.get("displayName")
+        if not isinstance(item_type, str) or not isinstance(item_name, str):
+            continue
+        if item_types is not None and item_type not in item_types:
+            continue
+        for path in sorted(platform_file.parent.rglob("*")):
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            files.append(ItemFile(item_type, item_name, path, text))
+    return files
+
+
 def _unmatched_find_values(
-    parameters: dict[str, Any], repository_directory: Path, parameter_files: set[Path]
+    config: DeployConfig, parameters: dict[str, Any], environments: list[str]
 ) -> list[str]:
-    """find_values that occur in no repository file. fabric-cicd skips them silently."""
-    entries = enumerate_mappings(parameters.get("find_replace"))
+    """find_values that occur in no file their filters select. fabric-cicd skips them silently."""
+    entries = [
+        (index, entry, str(entry.get("find_value") or ""))
+        for index, entry in enumerate_mappings(parameters.get("find_replace"))
+    ]
+    entries = [
+        (index, entry, find_value)
+        for index, entry, find_value in entries
+        if find_value
+        and not find_value.startswith(DYNAMIC_VALUE_PREFIX)
+        and not _is_true(entry.get("is_regex"))
+    ]
     if not entries:
         return []
+    try:
+        from fabric_cicd._parameter._utils import check_replacement, process_input_path
+    except ImportError as error:
+        raise FabkitError(
+            "fabric-cicd's parameter filters could not be imported; its private API moved.",
+            [str(error)],
+        ) from error
 
-    contents = []
-    for path in repository_directory.rglob("*"):
-        # Every find_value occurs in the parameter file itself
-        if not path.is_file() or path.resolve() in parameter_files:
-            continue
-        try:
-            contents.append(path.read_text(encoding="utf-8"))
-        except (UnicodeDecodeError, OSError):
-            continue
-    lowered = [text.lower() for text in contents]
+    unmatched: dict[int, list[str]] = {}
+    for environment in environments:
+        directory = config.repository_directory(environment)
+        files = _item_files(directory, config.item_types(environment))
+        for index, entry, find_value in entries:
+            paths = process_input_path(directory, entry.get("file_path"))
+            selected = [
+                file.text.lower() if _is_true(entry.get("ignore_case")) else file.text
+                for file in files
+                if check_replacement(
+                    entry.get("item_type"),
+                    entry.get("item_name"),
+                    paths,
+                    file.item_type,
+                    file.item_name,
+                    file.path,
+                )
+            ]
+            needle = find_value.lower() if _is_true(entry.get("ignore_case")) else find_value
+            if not any(needle in text for text in selected):
+                unmatched.setdefault(index, []).append(environment)
 
-    messages = []
-    for index, entry in entries:
-        find_value = str(entry.get("find_value") or "")
-        if (
-            not find_value
-            or find_value.startswith(DYNAMIC_VALUE_PREFIX)
-            or _is_true(entry.get("is_regex"))
-        ):
-            continue
-        if _is_true(entry.get("ignore_case")):
-            found = any(find_value.lower() in text for text in lowered)
-        else:
-            found = any(find_value in text for text in contents)
-        if not found:
-            messages.append(
-                f"find_replace[{index}]: find_value {find_value!r} matches nothing under "
-                f"{repository_directory.name}/. The replacement is silently skipped."
-            )
-    return messages
+    return [
+        f"find_replace[{index}]: find_value {find_value!r} matches nothing in the item files it "
+        f"applies to for {', '.join(unmatched[index])}. The replacement is silently skipped."
+        for index, _, find_value in entries
+        if index in unmatched
+    ]
 
 
 def _is_true(flag: Any) -> bool:
@@ -385,7 +430,6 @@ def _stand_in_env_variables(names: set[str]) -> Iterator[None]:
 def _fabric_cicd_errors(
     config: DeployConfig,
     parameter_file: Path,
-    repository_directory: Path,
     environments: list[str],
     target_environment: str | None,
 ) -> list[str]:
@@ -415,7 +459,7 @@ def _fabric_cicd_errors(
             collect_fatal_logs() as collected,
         ):
             parameter = Parameter(
-                repository_directory=repository_directory,
+                repository_directory=config.repository_directory(environment),
                 item_type_in_scope=config.item_types(environment) or list(ACCEPTED_ITEM_TYPES),
                 environment=environment,
                 parameter_file_path=str(parameter_file),

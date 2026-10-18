@@ -93,11 +93,12 @@ def select_published(names: list[str], config: DeployConfig, environment: str) -
     """The names fabric-cicd publishes, by publish.exclude_regex and publish.items_to_include."""
     exclude = config.value("publish", "exclude_regex", environment)
     include = config.value("publish", "items_to_include", environment)
+    included = None if include is None else {str(item).lower() for item in include}
     return [
         name
         for name in names
         if not (exclude and re.match(exclude, name))
-        and (include is None or f"{name}.SemanticModel" in include)
+        and (included is None or f"{name}.SemanticModel".lower() in included)
     ]
 
 

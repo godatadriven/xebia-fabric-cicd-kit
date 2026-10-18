@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 import yaml
-from helpers import CONFIG, FabricRepo, assert_reported, find_replace
+from helpers import CONFIG, FabricRepo, assert_reported, find_replace, platform_json
 
 from fabkit.config import load_deploy_config
 from fabkit.errors import FabkitError, Findings
@@ -61,13 +61,14 @@ def test_unknown_environment_key_fails(fabric_repo: FabricRepo) -> None:
     assert_reported(findings.errors, "unknown environment key", "TEST")
 
 
-# _ALL_ next to another key fails.
+# _ALL_ next to another key fails, through fabric-cicd's own validation.
 def test_all_with_other_keys_fails(fabric_repo: FabricRepo) -> None:
     notebook_with(fabric_repo, "x")
 
     findings = check(fabric_repo, find_replace("x", _ALL_="y", DEV="z"))
 
-    assert_reported(findings.errors, "must be the only key")
+    assert_reported(findings.errors, "can only be used alone")
+    assert not any("unknown environment key" in e for e in findings.errors), findings.errors
 
 
 # Each placeholder form fails.
@@ -245,6 +246,34 @@ def test_binding_to_known_model_passes(fabric_repo: FabricRepo, legacy: bool) ->
     assert findings.errors == []
 
 
+# A binding is checked against each environment's folder: a model missing from one fails.
+def test_binding_checked_per_repository_directory(fabric_repo: FabricRepo) -> None:
+    with_semantic_model(fabric_repo, "sales")
+    config = (fabric_repo.root / "config.yml").read_text(encoding="utf-8")
+    fabric_repo.write(
+        "config.yml",
+        config.replace(
+            "  repository_directory: src\n",
+            "  repository_directory:\n    DEV: src\n    PROD: src_prod\n",
+        ),
+    )
+    fabric_repo.write("src_prod/nb.Notebook/.platform", platform_json("Notebook", "nb", GUID_B))
+
+    findings = check(fabric_repo, binding("sales", legacy=False))
+
+    assert_reported(findings.errors, "'sales'", "src_prod/")
+
+
+# A per-environment connection_id in the legacy list format fails: fabric-cicd skips the binding.
+def test_legacy_binding_with_environment_mapping_fails(fabric_repo: FabricRepo) -> None:
+    with_semantic_model(fabric_repo, "sales")
+    entry = {"semantic_model_name": "sales", "connection_id": {"DEV": GUID_A, "PROD": GUID_B}}
+
+    findings = check(fabric_repo, yaml.safe_dump({"semantic_model_binding": [entry]}))
+
+    assert_reported(findings.errors, "PROD", "not supported in the legacy format")
+
+
 # No parameter file configured means nothing to check.
 def test_no_parameter_file_passes(fabric_repo: FabricRepo) -> None:
     (fabric_repo.root / "src/parameter.yml").unlink()
@@ -365,6 +394,99 @@ def test_is_regex_false_is_matched(fabric_repo: FabricRepo) -> None:
     findings = check(fabric_repo, yaml.safe_dump({"find_replace": [entry]}))
 
     assert_reported(findings.errors, "matches nothing")
+
+
+def filtered_find_replace(**filters: Any) -> str:
+    """parameter.yml text with one find_replace entry for GUID_A, limited by filters."""
+    entry = {"find_value": GUID_A, "replace_value": {"DEV": GUID_A, "PROD": GUID_B}, **filters}
+    return yaml.safe_dump({"find_replace": [entry]})
+
+
+# A find_value inside the items its filters select passes.
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"item_type": "Notebook", "item_name": "nb"},
+        {"item_name": ["other", "nb"]},
+        {"file_path": "nb.Notebook/notebook-content.py"},
+        {"file_path": "**/notebook-content.py"},
+    ],
+)
+def test_find_value_in_filtered_items_passes(
+    fabric_repo: FabricRepo, filters: dict[str, Any]
+) -> None:
+    notebook_with(fabric_repo, GUID_A)
+
+    findings = check(fabric_repo, filtered_find_replace(**filters))
+
+    assert not any("matches nothing" in e for e in findings.errors), findings.errors
+
+
+# A filter that names no item fails through fabric-cicd's own validation.
+def test_filter_naming_no_item_fails(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, GUID_A)
+
+    findings = check(fabric_repo, filtered_find_replace(item_name="nb_typo"))
+
+    assert_reported(findings.errors, "'nb_typo' not found")
+
+
+# A find_value that occurs only outside the existing items its filters select fails.
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {"item_name": "other"},
+        {"file_path": "other.Notebook/notebook-content.py"},
+    ],
+)
+def test_find_value_outside_filtered_items_fails(
+    fabric_repo: FabricRepo, filters: dict[str, Any]
+) -> None:
+    notebook_with(fabric_repo, GUID_A)
+    fabric_repo.write("src/other.Notebook/.platform", platform_json("Notebook", "other", GUID_B))
+    fabric_repo.write("src/other.Notebook/notebook-content.py", "no ids here\n")
+
+    findings = check(fabric_repo, filtered_find_replace(**filters))
+
+    assert_reported(findings.errors, "matches nothing")
+
+
+# A find_value that occurs only in a file outside any item fails: fabric-cicd replaces item files.
+def test_find_value_outside_items_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("src/notes.md", GUID_A)
+
+    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
+
+    assert_reported(findings.errors, "matches nothing")
+
+
+# A find_value that occurs only in an item type outside item_types_in_scope fails.
+def test_find_value_in_item_out_of_scope_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("src/r.Report/.platform", platform_json("Report", "r", GUID_B))
+    fabric_repo.write("src/r.Report/report.json", GUID_A)
+
+    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
+
+    assert_reported(findings.errors, "matches nothing")
+
+
+# A parameter file shared by environments is checked against each environment's folder.
+def test_find_value_checked_per_repository_directory(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, GUID_A)
+    fabric_repo.write(
+        "config.yml",
+        CONFIG.replace(
+            "  repository_directory: src\n",
+            "  repository_directory:\n    DEV: src\n    PROD: src_prod\n",
+        ),
+    )
+    fabric_repo.write("src_prod/nb.Notebook/.platform", platform_json("Notebook", "nb", GUID_B))
+    fabric_repo.write("src_prod/nb.Notebook/notebook-content.py", "no ids here\n")
+
+    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
+
+    assert_reported(findings.errors, "matches nothing", "PROD")
+    assert not any("matches nothing" in e and "DEV" in e for e in findings.errors), findings.errors
 
 
 # The legacy semantic_model_binding list passes.
