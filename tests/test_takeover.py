@@ -202,6 +202,18 @@ def test_items_to_include_is_honoured(fabric_repo: FabricRepo, api: FakeApi) -> 
     assert api.posted == [takeover_url("sm-2")]
 
 
+# publish.items_to_include matches in any casing, as fabric-cicd does.
+def test_items_to_include_ignores_case(fabric_repo: FabricRepo, api: FakeApi) -> None:
+    api.pages[ITEMS_URL]["value"].append({"id": "sm-2", "displayName": "stock"})
+    with_publish(fabric_repo, "  items_to_include: [STOCK.semanticmodel]\n")
+    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
+    add_model(fabric_repo, "stock", "stock", "a2222222-2222-2222-2222-222222222222")
+
+    run(fabric_repo)
+
+    assert api.posted == [takeover_url("sm-2")]
+
+
 # publish.skip for the environment skips the takeover.
 def test_publish_skip_is_honoured(fabric_repo: FabricRepo, api: FakeApi) -> None:
     with_publish(fabric_repo, "  skip:\n    DEV: true\n")

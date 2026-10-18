@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 from fabkit.errors import FabkitError, Findings
-from fabkit.platform_files import item_types_present
+from fabkit.platform_files import item_folders_by_name, item_types_present
 
 
 @dataclass(frozen=True)
@@ -98,6 +98,7 @@ def check_config(config: DeployConfig) -> Findings:
     findings.errors.extend(_fabric_cicd_errors(config, environments))
     findings.errors.extend(_unpublish_errors(config, environments))
     findings.errors.extend(_empty_repository_errors(config, environments))
+    findings.errors.extend(_duplicate_item_errors(config, environments))
     findings.errors.extend(_unreferenced_parameter_errors(config, environments))
     return findings
 
@@ -166,6 +167,26 @@ def _empty_repository_errors(config: DeployConfig, environments: list[str]) -> l
             "workspace. Add items, or set unpublish.skip to true."
         )
     return errors
+
+
+def _duplicate_item_errors(config: DeployConfig, environments: list[str]) -> list[str]:
+    """Items in scope sharing a type and name. fabric-cicd deploys only one of them."""
+    errors = []
+    for environment in environments:
+        try:
+            directory = config.repository_directory(environment)
+        except FabkitError:
+            continue
+        scope = config.item_types(environment)
+        for (item_type, name), folders in item_folders_by_name(directory).items():
+            if len(folders) < 2 or (scope is not None and item_type not in scope):
+                continue
+            listed = ", ".join(str(folder.relative_to(directory)) for folder in folders)
+            errors.append(
+                f"{item_type} {name!r} is in {listed}. fabric-cicd deploys only one of them; "
+                "rename one."
+            )
+    return list(dict.fromkeys(errors))
 
 
 def _unreferenced_parameter_errors(config: DeployConfig, environments: list[str]) -> list[str]:

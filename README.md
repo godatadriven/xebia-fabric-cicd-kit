@@ -10,7 +10,7 @@ It extends item validation with custom checks, pre-commit hooks and extensions t
 
 To onboard, start a new Fabric repository from the [template](templates/fabric-repo/).
 
-At the moment, GitHub is the only supported platform.
+At the moment, GitHub is the only supported platform. Private-link workspaces are not supported: fabkit's own API calls and uploads use the public Fabric, Power BI and OneLake endpoints.
 
 ## How it works
 
@@ -30,16 +30,17 @@ Checks fabkit adds to fabric-cicd:
 | Placeholder (`TODO`, `<...>`) left in a value | Deploys it as written | `validate` fails |
 | Value shaped unlike its `find_value`, e.g. a GUID with a character missing | Deploys it | `validate` fails |
 | Same value in every environment | Deploys it | `validate` fails; use `_ALL_` if intended |
-| `find_value` that matches no file | Replaces nothing | `validate` fails |
+| `find_value` that matches no file its `item_type`, `item_name` or `file_path` filters select, in any environment | Replaces nothing | `validate` fails |
 | `parameter.yml` that `config.yml` does not reference | Ignores the file | `validate` fails |
 | No items in scope while `unpublish.skip` is `false` | Removes every item of the types in scope from the workspace | `validate` fails |
-| Two items with the same `logicalId` | One overwrites the other | `validate` fails |
+| Two items with the same `logicalId` | Fails at deploy, after login; allows a shared all-zero placeholder | `validate` fails |
+| Two items with the same type and name in different folders | Deploys only one of them | `validate` fails |
 | VariableLibrary override with keys other than `name` and `value` | Fabric rejects the library at publish | `validate` fails |
 | VariableLibrary without a value set for an environment | Activates the default value set | `validate` fails; add an empty value set to keep the defaults |
 | `semantic_model_binding` to a model that is not in the repository | Skips the binding | `validate` fails |
 | Error logged while validating `parameter.yml`, e.g. an unknown `item_type` | Skips the replacement | `validate` fails |
 | Connection ID the service principal cannot see | Publishes the item unbound and reports success | `deploy` stops before publishing |
-| Binding or value-set warning during the deploy | Reports success | `deploy` fails |
+| Binding, value-set or unpublish warning during the deploy | Reports success | `deploy` fails |
 | Semantic model owned by someone other than the deploy identity | `semantic_model_binding` fails: only the owner can bind | `deploy --take-over-semantic-models` makes the deploy identity owner first |
 
 ## Getting started

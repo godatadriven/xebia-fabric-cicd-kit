@@ -27,6 +27,14 @@ def test_duplicate_ids_fail(tmp_path: Path) -> None:
     assert_reported(check_logical_ids(tmp_path).errors, "a.Notebook", "b.Notebook")
 
 
+# Two items sharing the all-zero placeholder fail, asking for a unique logicalId.
+def test_shared_placeholder_id_fails(tmp_path: Path) -> None:
+    zero = "00000000-0000-0000-0000-000000000000"
+    platform(tmp_path, "a.Notebook", zero)
+    platform(tmp_path, "b.Notebook", zero)
+    assert_reported(check_logical_ids(tmp_path).errors, "placeholder", "unique logicalId")
+
+
 # Invalid JSON, a missing logicalId and a non-string logicalId each fail.
 def test_invalid_files_fail(tmp_path: Path) -> None:
     (tmp_path / "a.Notebook").mkdir()

@@ -1,6 +1,7 @@
 import inspect
 import logging
 
+from fabric_cicd import fabric_workspace
 from fabric_cicd._items import _semanticmodel, _variablelibrary
 
 from fabkit.warnings import FATAL_WARNING_PATTERNS, collect_fatal_logs
@@ -16,6 +17,7 @@ SAMPLES = (
     "model binding.",
     "Provided target environment 'PROD' does not match any value sets.  Using 'Default value set'",
     "settings.json file not found for item vars. Active value set not changed.",
+    "Failed to unpublish Notebook 'old'. Raw exception: 409 Conflict",
 )
 
 
@@ -27,7 +29,9 @@ def test_patterns_match_samples() -> None:
 
 # The pinned fabric-cicd still contains every warning text the patterns rely on.
 def test_fabric_cicd_still_logs_these_texts() -> None:
-    source = inspect.getsource(_semanticmodel) + inspect.getsource(_variablelibrary)
+    source = "".join(
+        inspect.getsource(module) for module in (_semanticmodel, _variablelibrary, fabric_workspace)
+    )
     for fragment in (
         "not found for semantic model",
         "Unexpected connection_id type",
@@ -37,6 +41,7 @@ def test_fabric_cicd_still_logs_these_texts() -> None:
         "Invalid 'semantic_model_binding' type",
         "does not match any value sets",
         "settings.json file not found for item",
+        'f"Failed to unpublish {item_type}',
     ):
         assert fragment in source, (
             f"fabric-cicd no longer logs {fragment!r}; update FATAL_WARNING_PATTERNS"
