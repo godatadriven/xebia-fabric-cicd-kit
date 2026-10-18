@@ -4,45 +4,21 @@ from typing import Any
 
 import pytest
 import yaml
-from helpers import CONFIG, FabricRepo, FakeCredential, FakeOneLake, find_replace, platform_json
+from helpers import (
+    CONFIG,
+    CONN,
+    LAKEHOUSE_ID,
+    LAKEHOUSE_NAME,
+    FabricRepo,
+    FakeFabric,
+    find_replace,
+    platform_json,
+)
 
-from fabkit import connections, deploy, takeover
+from fabkit import deploy, takeover, uploads, workspaces
 from fabkit.cli import main
-from fabkit.config import load_deploy_config
-from fabkit.connections import FABRIC_API_ROOT, POWER_BI_API_ROOT
+from fabkit.connections import POWER_BI_API_ROOT
 from fabkit.errors import FabkitError
-
-LAKEHOUSE = "cccccccc-0000-0000-0000-000000000003"
-CONN = "eeeeeeee-0000-0000-0000-000000000005"
-
-
-class FakeFabric:
-    """Stands in for Fabric and OneLake, and records what fabkit asked of them."""
-
-    def __init__(self) -> None:
-        self.deploys: list[dict[str, Any]] = []
-        self.connection_lookups = 0
-        self.visible_connections = {CONN: "warehouse"}
-        self.workspaces = [{"id": "ws-dev-guid", "displayName": "sales-dev"}]
-        self.onelake = FakeOneLake()
-
-
-@pytest.fixture
-def fabric(monkeypatch: pytest.MonkeyPatch) -> FakeFabric:
-    """Replace every Fabric, OneLake and login call. The rest of fabkit runs for real."""
-    fake = FakeFabric()
-    monkeypatch.delenv("RUNNER_DEBUG", raising=False)
-    monkeypatch.setattr(deploy, "_credential", FakeCredential)
-    monkeypatch.setattr(deploy, "_deploy_with_config", lambda **kwargs: fake.deploys.append(kwargs))
-    monkeypatch.setattr(deploy, "onelake_client", lambda _credential: fake.onelake)
-    monkeypatch.setattr(deploy, "get_json", lambda _url, _token: {"value": fake.workspaces})
-
-    def list_connections(_credential: Any) -> dict[str, str]:
-        fake.connection_lookups += 1
-        return fake.visible_connections
-
-    monkeypatch.setattr(connections, "list_connections", list_connections)
-    return fake
 
 
 def bind_connection(repo: FabricRepo) -> None:
@@ -91,21 +67,24 @@ def test_pending_value_blocks_deploy(fabric_repo: FabricRepo, fabric: FakeFabric
 
 # A missing upload source fails before anything is published.
 def test_missing_upload_blocks_deploy(fabric_repo: FabricRepo, fabric: FakeFabric) -> None:
-    code = main(["deploy", "--environment", "DEV", "--upload", f"nope/={LAKEHOUSE}:Files/x"])
+    code = main(["deploy", "--environment", "DEV", "--upload", f"nope/={LAKEHOUSE_NAME}:Files/x"])
 
     assert code == 1
     assert fabric.connection_lookups == 0
     assert fabric.deploys == []
 
 
-# Uploads run after the deploy, into the workspace resolved by name.
+# Uploads run after the deploy, into the lakehouse found by name in the deployed workspace.
 def test_uploads_land_in_resolved_workspace(fabric_repo: FabricRepo, fabric: FakeFabric) -> None:
     fabric_repo.write("lib/m.py", "x = 1")
 
-    code = main(["deploy", "--environment", "DEV", "--upload", f"lib/={LAKEHOUSE}:Files/_lib/lib/"])
+    code = main(
+        ["deploy", "--environment", "DEV", "--upload", f"lib/={LAKEHOUSE_NAME}:Files/_lib/lib/"]
+    )
 
     assert code == 0
-    assert list(fabric.onelake.written) == [f"ws-dev-guid/{LAKEHOUSE}/Files/_lib/lib/m.py"]
+    live = f"ws-dev-guid/{LAKEHOUSE_ID}/Files/_lib/lib"
+    assert sorted(fabric.onelake.written) == [f"{live}/.fabkit-upload", f"{live}/m.py"]
 
 
 # --skip-connection-check skips the pre-flight.
@@ -165,60 +144,6 @@ def test_runner_debug_enables_debug_logging(
     assert levels == ["DEBUG"]
 
 
-# A configured workspace_id is used without an API call.
-def test_resolve_workspace_id_from_config(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fabric_repo.write(
-        "config.yml",
-        CONFIG.replace(
-            "  workspace:\n    DEV: sales-dev\n    PROD: sales-prod\n",
-            "  workspace_id:\n"
-            "    DEV: 11111111-1111-1111-1111-111111111111\n"
-            "    PROD: 22222222-2222-2222-2222-222222222222\n",
-        ),
-    )
-
-    def fail(_url: str, _token: str) -> dict[str, Any]:
-        raise AssertionError("must not call the API")
-
-    monkeypatch.setattr(deploy, "get_json", fail)
-
-    workspace_id = deploy.resolve_workspace_id(
-        FakeCredential(), load_deploy_config(fabric_repo.config), "DEV"
-    )
-
-    assert workspace_id == "11111111-1111-1111-1111-111111111111"
-
-
-# A workspace name is looked up across result pages.
-def test_resolve_workspace_name_across_pages(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pages = {
-        f"{FABRIC_API_ROOT}/workspaces": {
-            "value": [{"id": "other-guid", "displayName": "other"}],
-            "continuationUri": "next",
-        },
-        "next": {"value": [{"id": "ws-dev-guid", "displayName": "sales-dev"}]},
-    }
-    monkeypatch.setattr(deploy, "get_json", lambda url, _token: pages[url])
-
-    workspace_id = deploy.resolve_workspace_id(
-        FakeCredential(), load_deploy_config(fabric_repo.config), "DEV"
-    )
-
-    assert workspace_id == "ws-dev-guid"
-
-
-# An unknown workspace name fails, naming the workspace.
-def test_resolve_unknown_workspace_fails(fabric_repo: FabricRepo, fabric: FakeFabric) -> None:
-    fabric.workspaces = []
-
-    with pytest.raises(FabkitError, match="sales-dev"):
-        deploy.resolve_workspace_id(FakeCredential(), load_deploy_config(fabric_repo.config), "DEV")
-
-
 # A fabric-cicd warning during the deploy skips the uploads.
 def test_fatal_warning_skips_uploads(
     fabric_repo: FabricRepo, fabric: FakeFabric, monkeypatch: pytest.MonkeyPatch
@@ -232,7 +157,7 @@ def test_fatal_warning_skips_uploads(
 
     monkeypatch.setattr(deploy, "_deploy_with_config", deploy_with_warning)
 
-    code = main(["deploy", "--environment", "DEV", "--upload", f"lib/={LAKEHOUSE}:Files/x/"])
+    code = main(["deploy", "--environment", "DEV", "--upload", f"lib/={LAKEHOUSE_NAME}:Files/x/"])
 
     assert code == 1
     assert fabric.onelake.written == {}
@@ -251,9 +176,9 @@ def test_upload_error_fails_without_traceback(
         def get_file_system_client(self, _workspace_id: str) -> Any:
             raise RuntimeError("403 forbidden")
 
-    monkeypatch.setattr(deploy, "onelake_client", lambda _credential: Boom())
+    monkeypatch.setattr(uploads, "onelake_client", lambda _credential: Boom())
 
-    code = main(["deploy", "--environment", "DEV", "--upload", f"lib/={LAKEHOUSE}:Files/x/"])
+    code = main(["deploy", "--environment", "DEV", "--upload", f"lib/={LAKEHOUSE_NAME}:Files/x/"])
 
     err = capsys.readouterr().err
     assert code == 1
@@ -305,7 +230,7 @@ def test_duplicate_logical_id_blocks_deploy(
     def no_login() -> None:
         raise AssertionError("must not log in")
 
-    monkeypatch.setattr(deploy, "_credential", no_login)
+    monkeypatch.setattr(workspaces, "default_credential", no_login)
 
     assert main(["deploy", "--environment", "DEV"]) == 1
     assert fabric.deploys == []
@@ -380,3 +305,15 @@ def test_missing_value_set_blocks_deploy(fabric_repo: FabricRepo, fabric: FakeFa
 
     assert main(["deploy", "--environment", "DEV"]) == 1
     assert fabric.deploys == []
+
+
+# --upload-replace-existing lets an upload replace a folder that fabkit did not create.
+def test_upload_replace_existing_in_deploy(fabric_repo: FabricRepo, fabric: FakeFabric) -> None:
+    live = f"ws-dev-guid/{LAKEHOUSE_ID}/Files/_lib/lib"
+    fabric.onelake.written = {f"{live}/data.csv": b"keep"}
+    fabric_repo.write("lib/m.py", "x = 1")
+    args = ["deploy", "--environment", "DEV", "--upload", f"lib/={LAKEHOUSE_NAME}:Files/_lib/lib/"]
+
+    assert main(args) == 1
+    assert main([*args, "--upload-replace-existing"]) == 0
+    assert f"{live}/m.py" in fabric.onelake.written

@@ -64,6 +64,15 @@ class DeployConfig:
         return list(value) if value else None
 
 
+def require_environment(config: DeployConfig, environment: str) -> None:
+    """Fail when config.yml has no workspace for the environment."""
+    if environment not in config.environments:
+        raise FabkitError(
+            f"Environment {environment!r} is not in {config.path.name}.",
+            [f"Known environments: {', '.join(config.environments)}"],
+        )
+
+
 def load_deploy_config(path: Path) -> DeployConfig:
     """Read a fabric-cicd config.yml."""
     if not path.is_file():
