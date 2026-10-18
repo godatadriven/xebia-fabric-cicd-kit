@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 from fabkit.errors import FabkitError, Findings
+from fabkit.platform_files import item_types_present
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ def check_config(config: DeployConfig) -> Findings:
     findings = Findings()
     findings.errors.extend(_fabric_cicd_errors(config, environments))
     findings.errors.extend(_unpublish_errors(config, environments))
+    findings.errors.extend(_empty_repository_errors(config, environments))
     findings.errors.extend(_unreferenced_parameter_errors(config, environments))
     return findings
 
@@ -127,6 +129,34 @@ def _unpublish_errors(config: DeployConfig, environments: list[str]) -> list[str
         f"{config.path.name}: set unpublish.skip to true or false, for all or per environment. "
         "With false, workspace items that are not in the repository are removed."
     ]
+
+
+def _empty_repository_errors(config: DeployConfig, environments: list[str]) -> list[str]:
+    """With unpublish on, a repository without items in scope empties the workspace."""
+    errors = []
+    for environment in environments:
+        if config.value("unpublish", "skip", environment) is not False:
+            continue
+        try:
+            directory = config.repository_directory(environment)
+        except FabkitError:
+            continue
+        # A missing folder is reported by fabric-cicd's own validation
+        if not directory.is_dir():
+            continue
+        scope = config.item_types(environment)
+        present = item_types_present(directory)
+        if scope is not None:
+            present &= set(scope)
+        if present:
+            continue
+        removed = f"{', '.join(scope)} item" if scope else "item"
+        errors.append(
+            f"{config.path.name}: {environment} deploys no items from {directory.name}/, and "
+            f"unpublish.skip is false. The deploy would remove every {removed} from the "
+            "workspace. Add items, or set unpublish.skip to true."
+        )
+    return errors
 
 
 def _unreferenced_parameter_errors(config: DeployConfig, environments: list[str]) -> list[str]:
