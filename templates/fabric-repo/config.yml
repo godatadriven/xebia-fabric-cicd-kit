@@ -7,4 +7,5 @@ core:
   parameter: src/parameter.yml
   item_types_in_scope: [Notebook, DataPipeline, VariableLibrary, Environment]
 unpublish:
-  skip: false
+  # Set to false once src/ has items
+  skip: true

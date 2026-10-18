@@ -1,5 +1,7 @@
+import shutil
+
 import pytest
-from helpers import CONFIG, FabricRepo, assert_reported
+from helpers import CONFIG, PLATFORM, FabricRepo, assert_reported
 
 from fabkit.config import check_config, load_deploy_config
 from fabkit.errors import FabkitError
@@ -95,3 +97,44 @@ def test_invalid_yaml_config_fails(fabric_repo: FabricRepo) -> None:
 
     with pytest.raises(FabkitError, match="invalid YAML"):
         load_deploy_config(fabric_repo.config)
+
+
+def remove_notebook(repo: FabricRepo) -> None:
+    shutil.rmtree(repo.root / "src/nb.Notebook")
+
+
+# A repository with no items in scope fails while unpublish removes orphans.
+def test_empty_repository_with_unpublish_fails(fabric_repo: FabricRepo) -> None:
+    remove_notebook(fabric_repo)
+
+    assert_reported(config_errors(fabric_repo), "DEV", "no items", "Notebook")
+
+
+# A repository with no items passes when unpublish is skipped.
+def test_empty_repository_with_unpublish_skipped_passes(fabric_repo: FabricRepo) -> None:
+    remove_notebook(fabric_repo)
+    fabric_repo.write("config.yml", CONFIG.replace("skip: false", "skip: true"))
+
+    assert config_errors(fabric_repo) == []
+
+
+# Items of types outside item_types_in_scope do not count.
+def test_only_out_of_scope_items_fail(fabric_repo: FabricRepo) -> None:
+    remove_notebook(fabric_repo)
+    fabric_repo.write("src/sales.Report/.platform", PLATFORM.replace("Notebook", "Report"))
+
+    assert_reported(config_errors(fabric_repo), "no items")
+
+
+# Only environments that remove orphans are reported.
+def test_empty_repository_reports_unpublishing_environments(fabric_repo: FabricRepo) -> None:
+    remove_notebook(fabric_repo)
+    fabric_repo.write(
+        "config.yml",
+        CONFIG.replace("skip: false", "skip:\n    DEV: true\n    PROD: false"),
+    )
+
+    errors = config_errors(fabric_repo)
+
+    assert_reported(errors, "PROD", "no items")
+    assert not any("DEV" in e for e in errors), errors

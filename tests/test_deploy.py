@@ -1,4 +1,5 @@
 import logging
+import shutil
 from types import SimpleNamespace
 from typing import Any
 
@@ -377,6 +378,21 @@ def test_missing_value_set_blocks_deploy(fabric_repo: FabricRepo, fabric: FakeFa
     fabric_repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, VariableLibrary]"))
     fabric_repo.write("src/vars.VariableLibrary/variables.json", '{"variables": []}')
     fabric_repo.write("src/vars.VariableLibrary/settings.json", '{"valueSetsOrder": ["DEV"]}')
+
+    assert main(["deploy", "--environment", "DEV"]) == 1
+    assert fabric.deploys == []
+
+
+# A repository with no items fails the deploy before login while unpublish removes orphans.
+def test_empty_repository_blocks_deploy(
+    fabric_repo: FabricRepo, fabric: FakeFabric, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shutil.rmtree(fabric_repo.root / "src/nb.Notebook")
+
+    def no_login() -> None:
+        raise AssertionError("must not log in")
+
+    monkeypatch.setattr(deploy, "_credential", no_login)
 
     assert main(["deploy", "--environment", "DEV"]) == 1
     assert fabric.deploys == []
