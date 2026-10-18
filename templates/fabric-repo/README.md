@@ -18,7 +18,15 @@ git remote add origin <new remote url>
 
 Push once the [setup in Azure and GitHub](../../README.md#setup-in-azure-and-github) is done, because a push to `main` deploys.
 
-Run `pre-commit install` to enable the hooks. The `fabkit` version is pinned in `validate.yml`, `deploy.yml` and `.pre-commit-config.yaml`, and is bumped by hand.
+You need [uv](https://docs.astral.sh/uv/) and `make`. Then:
+
+```bash
+make setup                     # install pre-commit and its git hooks
+make validate                  # the pull request check
+make deploy ENVIRONMENT=DEV    # a deploy from your machine, after az login
+```
+
+`make help` lists the targets. The workflows call the same targets. The `fabkit` version is set in the `Makefile` and in `.pre-commit-config.yaml`; bump both by hand.
 
 ## Change first
 
