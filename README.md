@@ -81,6 +81,8 @@ fabkit validate --config deploy/config.yml --unmatched-find-value warning
 
 A value that cannot exist yet, such as the GUID of a production lakehouse that is not created, can be written as `PLACEHOLDER`. `validate` warns about it; `deploy` fails when it would reach the environment being deployed. This works in `find_replace`, `key_value_replace` and `spark_pool`; fabric-cicd rejects a `connection_id` that is not a GUID.
 
+A `$ENV:` value needs its environment variable only in the deploy of its own environment. `validate` runs without it, and applies the `features` in `config.yml` as fabric-cicd's deploy does.
+
 ### `fabkit deploy`
 
 Deploys one environment:

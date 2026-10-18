@@ -5,7 +5,7 @@ from fabric_cicd._items import _semanticmodel, _variablelibrary
 
 from fabkit.warnings import FATAL_WARNING_PATTERNS, collect_fatal_logs
 
-# The texts fabric-cicd 1.3.0 logs, with the f-string fields filled in
+# The texts the pinned fabric-cicd logs, with the f-string fields filled in
 SAMPLES = (
     "Connection ID 'abc' not found for semantic model 'Sales'",
     "Unexpected connection_id type 'int'; expected str or list. Skipping.",

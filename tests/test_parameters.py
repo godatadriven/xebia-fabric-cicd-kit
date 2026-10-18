@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Any
 
 import pytest
@@ -413,3 +414,72 @@ def test_non_utf8_parameter_file_fails(fabric_repo: FabricRepo) -> None:
 
     with pytest.raises(FabkitError, match="invalid YAML"):
         check_parameters(load_deploy_config(fabric_repo.config))
+
+
+ENV_FLAG = "features: [enable_environment_variable_replacement]\n"
+
+
+def env_reference(repo: FabricRepo, monkeypatch: pytest.MonkeyPatch, flag: bool = True) -> None:
+    """A PROD value read from $ENV:PROD_LAKEHOUSE_ID, with the variable unset."""
+    repo.write("config.yml", CONFIG + (ENV_FLAG if flag else ""))
+    notebook_with(repo, GUID_A)
+    repo.write("src/parameter.yml", find_replace(GUID_A, DEV=GUID_A, PROD="$ENV:PROD_LAKEHOUSE_ID"))
+    monkeypatch.delenv("PROD_LAKEHOUSE_ID", raising=False)
+
+
+# An $ENV: value passes validate when its variable is not set, and no variable is left behind.
+def test_env_reference_passes_validate(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert findings.errors == []
+    assert "PROD_LAKEHOUSE_ID" not in os.environ
+
+
+# An $ENV: value without the feature flag in config.yml fails.
+def test_env_reference_without_flag_fails(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch, flag=False)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert_reported(findings.errors, "enable_environment_variable_replacement")
+
+
+# An $ENV: value for the deploy target fails when its variable is not set.
+def test_unset_env_reference_fails_for_target(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
+
+    assert_reported(findings.errors, "for PROD", "could not be resolved")
+    assert not any("for DEV" in e for e in findings.errors), findings.errors
+
+
+# An $ENV: value for the deploy target passes when its variable is set.
+def test_set_env_reference_passes_for_target(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+    monkeypatch.setenv("PROD_LAKEHOUSE_ID", GUID_B)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
+
+    assert findings.errors == []
+
+
+# An unset $ENV: value for another environment does not block the deploy.
+def test_unset_env_reference_passes_for_other_target(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_reference(fabric_repo, monkeypatch)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="DEV")
+
+    assert findings.errors == []
