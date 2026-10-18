@@ -32,8 +32,12 @@ DYNAMIC_VALUE_PREFIX = "$"
 # fabric-cicd's environment variable token: "$ENV:LAKEHOUSE_ID" -> LAKEHOUSE_ID
 ENV_REFERENCE_PATTERN = re.compile(r"\$ENV:(\w+)")
 
-# Value given to an unset $ENV: variable while validating another environment
-ENV_STAND_IN = "unset"
+# Value given to an unset $ENV: variable while validating another environment.
+# fabric-cicd requires a GUID for a connection_id.
+ENV_STAND_IN = "00000000-0000-0000-0000-000000000000"
+
+# The feature flag that turns on $ENV: values
+ENV_REPLACEMENT_FLAG = "enable_environment_variable_replacement"
 
 GUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -69,11 +73,13 @@ def check_parameters(
     """
     findings = Findings()
     for parameter_file, environments in _files_by_environment(config).items():
-        parameters = _load(parameter_file)
+        parameters = load_parameters(parameter_file)
         blocks = iter_environment_blocks(parameters)
 
         findings.errors.extend(
-            _fabric_cicd_errors(config, parameter_file, environments, target_environment)
+            _fabric_cicd_errors(
+                config, parameter_file, parameters, environments, target_environment
+            )
         )
         unknown_models = [
             error
@@ -99,6 +105,17 @@ def check_parameters(
         else:
             findings.warnings.extend(unmatched)
     return findings
+
+
+def resolve_env_references(config: DeployConfig, environment: str, value: str) -> str:
+    """The value with each $ENV: reference replaced by its variable, as fabric-cicd's deploy does.
+
+    "$ENV:SM_CONNECTION" -> the value of SM_CONNECTION. Without the feature flag, or with the
+    variable unset, the reference stays.
+    """
+    if ENV_REPLACEMENT_FLAG not in config.features(environment):
+        return value
+    return ENV_REFERENCE_PATTERN.sub(lambda match: os.environ.get(match[1], match[0]), value)
 
 
 def _semantic_models_in_scope(config: DeployConfig, environment: str) -> bool:
@@ -139,15 +156,33 @@ def _files_by_environment(config: DeployConfig) -> dict[Path, list[str]]:
     return files
 
 
-def _load(parameter_file: Path) -> dict[str, Any]:
-    """Read the parameter file as a mapping. fabric-cicd's config check reports a missing file."""
+def load_parameters(parameter_file: Path) -> dict[str, Any]:
+    """The parameter file as a mapping, with the templates under extend merged in.
+
+    $ENV: values stay as written. fabric-cicd's validation reports a template it cannot read.
+    """
     try:
         loaded = yaml.safe_load(parameter_file.read_text(encoding="utf-8")) or {}
     except (yaml.YAMLError, UnicodeDecodeError) as error:
         raise FabkitError(f"{parameter_file.name}: invalid YAML.", [str(error)]) from error
     if not isinstance(loaded, dict):
         raise FabkitError(f"{parameter_file.name}: expected a mapping at the top level.")
-    return loaded
+    if "extend" not in loaded:
+        return loaded
+    try:
+        from fabric_cicd._parameter._parameter import Parameter
+    except ImportError as error:
+        raise FabkitError(
+            "fabric-cicd's parameter loader could not be imported; its private API moved.",
+            [str(error)],
+        ) from error
+    parameter = Parameter(
+        repository_directory=parameter_file.parent,
+        item_type_in_scope=[],
+        environment="",
+        parameter_file_path=str(parameter_file),
+    )
+    return dict(parameter.environment_parameter)
 
 
 def enumerate_mappings(value: Any) -> list[tuple[int, dict[str, Any]]]:
@@ -430,6 +465,7 @@ def _stand_in_env_variables(names: set[str]) -> Iterator[None]:
 def _fabric_cicd_errors(
     config: DeployConfig,
     parameter_file: Path,
+    parameters: dict[str, Any],
     environments: list[str],
     target_environment: str | None,
 ) -> list[str]:
@@ -448,7 +484,7 @@ def _fabric_cicd_errors(
             [str(error)],
         ) from error
 
-    env_references = set(ENV_REFERENCE_PATTERN.findall(parameter_file.read_text(encoding="utf-8")))
+    env_references = set(ENV_REFERENCE_PATTERN.findall(json.dumps(parameters)))
     errors = []
     for environment in environments:
         stand_ins = set() if environment == target_environment else env_references

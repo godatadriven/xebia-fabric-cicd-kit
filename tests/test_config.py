@@ -154,3 +154,51 @@ def test_same_name_different_type_passes(fabric_repo: FabricRepo) -> None:
     fabric_repo.write("src/nb.DataPipeline/.platform", platform)
 
     assert config_errors(fabric_repo) == []
+
+
+# A per-environment item_types_in_scope that leaves out an environment fails: it deploys every type.
+def test_item_types_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write(
+        "config.yml",
+        CONFIG.replace(
+            "item_types_in_scope: [Notebook]", "item_types_in_scope:\n    DEV: [Notebook]"
+        ),
+    )
+
+    assert_reported(config_errors(fabric_repo), "core.item_types_in_scope", "PROD")
+
+
+# A per-environment unpublish.exclude_regex that leaves out an environment fails.
+def test_unpublish_exclude_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("config.yml", CONFIG + "  exclude_regex:\n    PROD: ^keep_\n")
+
+    assert_reported(config_errors(fabric_repo), "unpublish.exclude_regex", "DEV")
+
+
+# Per-environment features that leave out an environment fail.
+def test_features_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write("config.yml", CONFIG + "features:\n  DEV: [enable_hard_delete]\n")
+
+    assert_reported(config_errors(fabric_repo), "features", "PROD")
+
+
+# A per-environment constant that leaves out an environment fails.
+def test_constant_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write(
+        "config.yml",
+        CONFIG + "constants:\n  DEFAULT_API_ROOT_URL:\n    DEV: https://api.fabric.microsoft.com\n",
+    )
+
+    assert_reported(config_errors(fabric_repo), "constants.DEFAULT_API_ROOT_URL", "PROD")
+
+
+# Mappings that name every environment pass.
+def test_complete_environment_mappings_pass(fabric_repo: FabricRepo) -> None:
+    fabric_repo.write(
+        "config.yml",
+        CONFIG
+        + "  exclude_regex:\n    DEV: ^keep_\n    PROD: ^keep_\n"
+        + "publish:\n  exclude_regex:\n    DEV: ^tmp_\n    PROD: ^tmp_\n",
+    )
+
+    assert config_errors(fabric_repo) == []

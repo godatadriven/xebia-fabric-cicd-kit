@@ -605,3 +605,97 @@ def test_unset_env_reference_passes_for_other_target(
     findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="DEV")
 
     assert findings.errors == []
+
+
+def extend_with(repo: FabricRepo, template_text: str) -> None:
+    """A parameter.yml whose only content comes from a template under extend."""
+    repo.write("src/template.yml", template_text)
+    repo.write("src/parameter.yml", "extend:\n  - template.yml\n")
+
+
+# An entry in an extend template is checked like one in parameter.yml.
+def test_extend_template_entries_are_checked(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, GUID_A)
+    extend_with(fabric_repo, find_replace(GUID_A, DEV="TODO", PROD=GUID_B))
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert_reported(findings.errors, "placeholder 'TODO'")
+
+
+# A PLACEHOLDER in an extend template fails the deploy to its environment.
+def test_extend_template_placeholder_fails_for_target(fabric_repo: FabricRepo) -> None:
+    notebook_with(fabric_repo, GUID_A)
+    extend_with(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD="PLACEHOLDER"))
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
+
+    assert_reported(findings.errors, "PLACEHOLDER", "PROD")
+
+
+# An unset $ENV: value in an extend template passes validate.
+def test_extend_template_env_reference_passes_validate(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fabric_repo.write("config.yml", CONFIG + ENV_FLAG)
+    notebook_with(fabric_repo, GUID_A)
+    extend_with(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD="$ENV:PROD_LAKEHOUSE_ID"))
+    monkeypatch.delenv("PROD_LAKEHOUSE_ID", raising=False)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert findings.errors == []
+
+
+def env_connection_binding(repo: FabricRepo, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model binding read from $ENV:DEV_CONNECTION and $ENV:PROD_CONNECTION, both unset."""
+    repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]") + ENV_FLAG)
+    repo.write("src/sales.SemanticModel/.platform", platform_json("SemanticModel", "sales", GUID_B))
+    models = [
+        {
+            "semantic_model_name": "sales",
+            "connection_id": {"DEV": "$ENV:DEV_CONNECTION", "PROD": "$ENV:PROD_CONNECTION"},
+        }
+    ]
+    repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": {"models": models}}))
+    monkeypatch.delenv("DEV_CONNECTION", raising=False)
+    monkeypatch.delenv("PROD_CONNECTION", raising=False)
+
+
+# An unset $ENV: connection_id passes validate.
+def test_env_connection_id_passes_validate(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_connection_binding(fabric_repo, monkeypatch)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config))
+
+    assert findings.errors == []
+
+
+# A deploy needs the $ENV: connection_id of every environment: fabric-cicd checks them all.
+def test_env_connection_id_of_other_environment_fails_deploy(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_connection_binding(fabric_repo, monkeypatch)
+    monkeypatch.setenv("PROD_CONNECTION", GUID_A)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
+
+    assert_reported(findings.errors, "DEV")
+
+
+# One $ENV: connection_id under _ALL_ needs only its own variable for a deploy.
+def test_env_connection_id_under_all_passes_deploy(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_connection_binding(fabric_repo, monkeypatch)
+    models = [{"semantic_model_name": "sales", "connection_id": {"_ALL_": "$ENV:SM_CONNECTION"}}]
+    fabric_repo.write(
+        "src/parameter.yml", yaml.safe_dump({"semantic_model_binding": {"models": models}})
+    )
+    monkeypatch.setenv("SM_CONNECTION", GUID_A)
+
+    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
+
+    assert findings.errors == []

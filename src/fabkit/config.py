@@ -11,6 +11,20 @@ import yaml
 from fabkit.errors import FabkitError, Findings
 from fabkit.platform_files import item_folders_by_name, item_types_present
 
+# Settings fabric-cicd reads per environment, besides features and constants
+ENVIRONMENT_MAPPED_SETTINGS = {
+    "core": ("item_types_in_scope",),
+    "publish": (
+        "exclude_regex",
+        "folder_exclude_regex",
+        "folder_path_to_include",
+        "shortcut_exclude_regex",
+        "items_to_include",
+        "skip",
+    ),
+    "unpublish": ("exclude_regex", "items_to_include", "skip"),
+}
+
 
 @dataclass(frozen=True)
 class DeployConfig:
@@ -44,6 +58,13 @@ class DeployConfig:
         """One setting for one environment. A plain value applies to every environment."""
         value = self.section(section).get(key)
         return value.get(environment) if isinstance(value, dict) else value
+
+    def features(self, environment: str) -> list[str]:
+        """The feature flags for one environment."""
+        value = self.raw.get("features")
+        if isinstance(value, dict):
+            value = value.get(environment)
+        return [str(flag) for flag in value] if isinstance(value, list) else []
 
     def repository_directory(self, environment: str) -> Path:
         """The folder holding the Fabric items for one environment."""
@@ -96,7 +117,8 @@ def check_config(config: DeployConfig) -> Findings:
 
     findings = Findings()
     findings.errors.extend(_fabric_cicd_errors(config, environments))
-    findings.errors.extend(_unpublish_errors(config, environments))
+    findings.errors.extend(_unpublish_errors(config))
+    findings.errors.extend(_missing_environment_errors(config, environments))
     findings.errors.extend(_empty_repository_errors(config, environments))
     findings.errors.extend(_duplicate_item_errors(config, environments))
     findings.errors.extend(_unreferenced_parameter_errors(config, environments))
@@ -122,23 +144,39 @@ def _fabric_cicd_errors(config: DeployConfig, environments: list[str]) -> list[s
     return errors
 
 
-def _unpublish_errors(config: DeployConfig, environments: list[str]) -> list[str]:
-    """unpublish.skip must be set for every environment."""
-    skip = config.section("unpublish").get("skip")
-    if isinstance(skip, bool):
+def _unpublish_errors(config: DeployConfig) -> list[str]:
+    """unpublish.skip must be set, for all or per environment."""
+    if isinstance(config.section("unpublish").get("skip"), bool | dict):
         return []
-    if isinstance(skip, dict):
-        missing = [name for name in environments if not isinstance(skip.get(name), bool)]
-        if not missing:
-            return []
-        return [
-            f"{config.path.name}: unpublish.skip is not set for {', '.join(missing)}. "
-            "With false, workspace items that are not in the repository are removed."
-        ]
     return [
         f"{config.path.name}: set unpublish.skip to true or false, for all or per environment. "
         "With false, workspace items that are not in the repository are removed."
     ]
+
+
+def _missing_environment_errors(config: DeployConfig, environments: list[str]) -> list[str]:
+    """Per-environment settings that leave out an environment. fabric-cicd skips them there."""
+    mappings: list[tuple[str, Any]] = [
+        (f"{section}.{key}", config.section(section).get(key))
+        for section, keys in ENVIRONMENT_MAPPED_SETTINGS.items()
+        for key in keys
+    ]
+    mappings.append(("features", config.raw.get("features")))
+    mappings.extend(
+        (f"constants.{key}", value) for key, value in config.section("constants").items()
+    )
+
+    errors = []
+    for name, value in mappings:
+        if not isinstance(value, dict):
+            continue
+        missing = [environment for environment in environments if environment not in value]
+        if missing:
+            errors.append(
+                f"{config.path.name}: {name} is not set for {', '.join(missing)}. fabric-cicd "
+                "ignores the setting for that environment; name every environment."
+            )
+    return errors
 
 
 def _empty_repository_errors(config: DeployConfig, environments: list[str]) -> list[str]:

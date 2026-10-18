@@ -312,3 +312,26 @@ def test_post_json_network_error_fails(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(FabkitError, match="POST https://x failed: .*connection reset"):
         post_json("https://x", "token", {})
+
+
+# A binding in an extend template is collected.
+def test_collects_binding_from_extend_template(fabric_repo: FabricRepo) -> None:
+    binding = {"default": {"connection_id": {"DEV": CONN_A, "PROD": CONN_B}}}
+    fabric_repo.write("src/template.yml", yaml.safe_dump({"semantic_model_binding": binding}))
+    fabric_repo.write("src/parameter.yml", "extend:\n  - template.yml\n")
+
+    assert list(collect(fabric_repo, "PROD")) == [CONN_B]
+
+
+# A $ENV: connection_id is checked with the value of its environment variable.
+def test_collects_env_connection_id_value(
+    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fabric_repo.write(
+        "config.yml", CONFIG + "features: [enable_environment_variable_replacement]\n"
+    )
+    binding = {"default": {"connection_id": {"_ALL_": "$ENV:SM_CONNECTION"}}}
+    fabric_repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": binding}))
+    monkeypatch.setenv("SM_CONNECTION", CONN_A)
+
+    assert list(collect(fabric_repo, "PROD")) == [CONN_A]
