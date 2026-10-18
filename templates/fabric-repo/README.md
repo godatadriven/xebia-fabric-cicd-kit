@@ -25,4 +25,5 @@ Run `pre-commit install` to enable the hooks. The `fabkit` version is pinned in 
 - `config.yml`: replace the three `<workspace name> [...]` values with your workspace names.
 - `config.yml`: set `item_types_in_scope` to the item types the repository deploys.
 - `src/`: put the Fabric items here. Replacements per environment go in `src/parameter.yml`.
+- `config.yml`: set `unpublish.skip` to `false` once `src/` has items, so items removed from the repository are removed from the workspace.
 - Delete this README or replace it with your own.

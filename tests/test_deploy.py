@@ -1,4 +1,5 @@
 import logging
+import shutil
 from types import SimpleNamespace
 from typing import Any
 
@@ -317,3 +318,18 @@ def test_upload_replace_existing_in_deploy(fabric_repo: FabricRepo, fabric: Fake
     assert main(args) == 1
     assert main([*args, "--upload-replace-existing"]) == 0
     assert f"{live}/m.py" in fabric.onelake.written
+
+
+# A repository with no items fails the deploy before login while unpublish removes orphans.
+def test_empty_repository_blocks_deploy(
+    fabric_repo: FabricRepo, fabric: FakeFabric, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    shutil.rmtree(fabric_repo.root / "src/nb.Notebook")
+
+    def no_login() -> None:
+        raise AssertionError("must not log in")
+
+    monkeypatch.setattr(workspaces, "default_credential", no_login)
+
+    assert main(["deploy", "--environment", "DEV"]) == 1
+    assert fabric.deploys == []

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 from fabkit.errors import Findings
 
@@ -34,17 +36,31 @@ def check_logical_ids(root: Path) -> Findings:
     return Findings(errors=errors)
 
 
-def item_names(root: Path, item_type: str) -> set[str]:
-    """Display names of the items of one type under root. Unreadable files are skipped."""
-    names = set()
+def _item_metadata(root: Path) -> Iterator[dict[str, Any]]:
+    """The metadata block of every .platform file under root. Unreadable files are skipped."""
     for path in root.rglob(".platform"):
         try:
             content = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
             continue
         metadata = content.get("metadata") if isinstance(content, dict) else None
-        if not isinstance(metadata, dict) or metadata.get("type") != item_type:
-            continue
-        if isinstance(metadata.get("displayName"), str):
-            names.add(metadata["displayName"])
-    return names
+        if isinstance(metadata, dict):
+            yield metadata
+
+
+def item_names(root: Path, item_type: str) -> set[str]:
+    """Display names of the items of one type under root."""
+    return {
+        metadata["displayName"]
+        for metadata in _item_metadata(root)
+        if metadata.get("type") == item_type and isinstance(metadata.get("displayName"), str)
+    }
+
+
+def item_types_present(root: Path) -> set[str]:
+    """Item types with at least one item under root."""
+    return {
+        metadata["type"]
+        for metadata in _item_metadata(root)
+        if isinstance(metadata.get("type"), str)
+    }

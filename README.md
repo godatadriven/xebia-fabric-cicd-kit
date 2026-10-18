@@ -32,6 +32,7 @@ Checks fabkit adds to fabric-cicd:
 | Same value in every environment | Deploys it | `validate` fails; use `_ALL_` if intended |
 | `find_value` that matches no file | Replaces nothing | `validate` fails |
 | `parameter.yml` that `config.yml` does not reference | Ignores the file | `validate` fails |
+| No items in scope while `unpublish.skip` is `false` | Removes every item of the types in scope from the workspace | `validate` fails |
 | Two items with the same `logicalId` | One overwrites the other | `validate` fails |
 | VariableLibrary override with keys other than `name` and `value` | Fabric rejects the library at publish | `validate` fails |
 | VariableLibrary without a value set for an environment | Activates the default value set | `validate` fails; add an empty value set to keep the defaults |
@@ -67,7 +68,7 @@ unpublish:
 On top of fabric-cicd's own rules, fabkit requires two things:
 
 - Every environment maps to a workspace (`core.workspace` or `core.workspace_id`). The keys are the environment names, and the GitHub Environments must use the same names.
-- `unpublish.skip` is set explicitly. With `false`, workspace items that are not in the repository are removed, which is also fabric-cicd's default.
+- `unpublish.skip` is set explicitly. With `false`, workspace items that are not in the repository are removed, which is also fabric-cicd's default. A repository with no items of the types in scope must use `true`.
 
 ## Usage
 
