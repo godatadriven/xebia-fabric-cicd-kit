@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" width="1000" height="500" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>Multi-repo deployments: per-team pipelines versus one shared fabkit</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0612"/>
+      <stop offset="1" stop-color="#1c0b2b"/>
+    </linearGradient>
+    <linearGradient id="kit" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6e2585"/>
+      <stop offset="1" stop-color="#b23fb4"/>
+    </linearGradient>
+    <g id="pipeline" fill="none" stroke="#5b2378" stroke-width="2.5">
+      <rect x="-12" y="-14" width="9" height="9" rx="1.5"/>
+      <rect x="5" y="2" width="9" height="9" rx="1.5"/>
+      <path d="M-7.5 -5 V2 M-7.5 2 l4.5 4.5 -4.5 4.5 -4.5 -4.5 z M-3 6.5 H5"/>
+    </g>
+    <g id="bars">
+      <rect x="-11" y="-2" width="7" height="13" rx="1" fill="#f2c811"/>
+      <rect x="-4" y="-8" width="7" height="19" rx="1" fill="#e8b10c"/>
+      <rect x="3" y="-14" width="7" height="25" rx="1" fill="#d39a08"/>
+    </g>
+    <g id="layers" fill="#f06b4f" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round">
+      <path d="M0 2 L14 8 L0 14 L-14 8 Z" opacity="0.55"/>
+      <path d="M0 -5 L14 1 L0 7 L-14 1 Z" opacity="0.8"/>
+      <path d="M0 -12 L14 -6 L0 0 L-14 -6 Z"/>
+    </g>
+    <g id="building" fill="none" stroke="#5b2378" stroke-width="2.2">
+      <rect x="-12" y="-11" width="24" height="23" rx="1.5"/>
+      <path d="M-6 -6 h3 M3 -6 h3 M-6 0 h3 M3 0 h3 M-6 6 h3 M3 6 h3 M-2 12 v-5 h4 v5"/>
+    </g>
+    <g id="package" fill="none" stroke="#5b2378" stroke-width="2.6" stroke-linejoin="round">
+      <path d="M0 -16 L13 -9 L13 7 L0 14 L-13 7 L-13 -9 Z M-13 -9 L0 -2 L13 -9 M0 -2 V14"/>
+    </g>
+  </defs>
+
+  <rect width="1000" height="500" rx="16" fill="url(#bg)"/>
+  <text x="32" y="54" font-size="28" fill="#ffffff">Multi-repo deployments</text>
+
+  <!-- Per-team pipelines -->
+  <text x="32" y="100" font-size="19" font-weight="700" fill="#ffffff">Per-team pipelines</text>
+  <g font-size="14">
+    <g transform="translate(32 118)">
+      <rect width="205" height="128" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="14" y="14" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#pipeline" x="36" y="36"/>
+      <text x="70" y="30" font-family="Menlo, Consolas, monospace" font-size="12" fill="#b9aed0">team-a</text>
+      <text x="70" y="49" font-weight="700" fill="#ffffff">Pipelines,</text>
+      <text x="70" y="66" font-weight="700" fill="#ffffff">notebooks</text>
+      <text x="14" y="110" fill="#e35bd8">⚠ own workflow</text>
+    </g>
+    <g transform="translate(247 118)">
+      <rect width="205" height="128" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="14" y="14" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#bars" x="36" y="36"/>
+      <text x="70" y="30" font-family="Menlo, Consolas, monospace" font-size="12" fill="#b9aed0">team-b</text>
+      <text x="70" y="49" font-weight="700" fill="#ffffff">Power BI</text>
+      <text x="14" y="110" fill="#e35bd8">⚠ copied team-a's, edited</text>
+    </g>
+    <g transform="translate(32 256)">
+      <rect width="205" height="128" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="14" y="14" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#layers" x="36" y="36"/>
+      <text x="70" y="30" font-family="Menlo, Consolas, monospace" font-size="12" fill="#b9aed0">team-c</text>
+      <text x="70" y="49" font-weight="700" fill="#ffffff">dbt</text>
+      <text x="14" y="110" fill="#e35bd8">⚠ older fabric-cicd</text>
+    </g>
+    <g transform="translate(247 256)">
+      <rect width="205" height="128" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="14" y="14" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#building" x="36" y="36"/>
+      <text x="70" y="30" font-family="Menlo, Consolas, monospace" font-size="12" fill="#b9aed0">team-d</text>
+      <text x="70" y="49" font-weight="700" fill="#ffffff">Another</text>
+      <text x="70" y="66" font-weight="700" fill="#ffffff">department</text>
+      <text x="14" y="110" fill="#e35bd8">⚠ no item scope set</text>
+    </g>
+  </g>
+  <text font-size="14" fill="#e6e0f0">
+    <tspan x="32" y="438">Different pipelines, often one shared workspace.</tspan>
+    <tspan x="32" y="458">A mistake in one repo breaks another team's items.</tspan>
+  </text>
+
+  <!-- Arrow -->
+  <path d="M466 243 h22 v-11 l18 19 -18 19 v-11 h-22 z" fill="#d94fd6"/>
+
+  <!-- With fabkit -->
+  <text x="522" y="100" font-size="19" font-weight="700" fill="#ffffff">With fabkit</text>
+  <g stroke="#d94fd6" stroke-width="1.5" opacity="0.85">
+    <line x1="745" y1="208" x2="575" y2="282"/>
+    <line x1="745" y1="208" x2="689" y2="282"/>
+    <line x1="745" y1="208" x2="803" y2="282"/>
+    <line x1="745" y1="208" x2="917" y2="282"/>
+  </g>
+  <rect x="522" y="118" width="446" height="90" rx="12" fill="url(#kit)"/>
+  <rect x="538" y="133" width="60" height="60" rx="11" fill="#ffffff"/>
+  <use href="#package" x="568" y="163"/>
+  <text x="614" y="160" font-size="30" font-weight="700" fill="#ffffff">fabkit</text>
+  <text x="614" y="186" font-size="15" fill="#f6e7f8">checks · workflows · template</text>
+  <text x="952" y="198" font-size="12" fill="#f6e7f8" text-anchor="end">on top of fabric-cicd</text>
+
+  <g font-size="12" text-anchor="middle">
+    <g transform="translate(522 282)">
+      <rect width="106" height="122" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="31" y="12" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#pipeline" x="53" y="34"/>
+      <text x="53" y="76" font-family="Menlo, Consolas, monospace" font-weight="700" font-size="13" fill="#ffffff">team-a</text>
+      <text x="53" y="94" fill="#e6e0f0">pins 0.3.0</text>
+      <text x="53" y="110" fill="#b9aed0">validate · deploy</text>
+    </g>
+    <g transform="translate(636 282)">
+      <rect width="106" height="122" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="31" y="12" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#bars" x="53" y="34"/>
+      <text x="53" y="76" font-family="Menlo, Consolas, monospace" font-weight="700" font-size="13" fill="#ffffff">team-b</text>
+      <text x="53" y="94" fill="#e6e0f0">pins 0.2.1</text>
+      <text x="53" y="110" fill="#b9aed0">validate · deploy</text>
+    </g>
+    <g transform="translate(750 282)">
+      <rect width="106" height="122" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="31" y="12" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#layers" x="53" y="34"/>
+      <text x="53" y="76" font-family="Menlo, Consolas, monospace" font-weight="700" font-size="13" fill="#ffffff">team-c</text>
+      <text x="53" y="94" fill="#e6e0f0">pins 0.3.0</text>
+      <text x="53" y="110" fill="#b9aed0">upload</text>
+    </g>
+    <g transform="translate(864 282)">
+      <rect width="104" height="122" rx="10" fill="#170c24" stroke="#3b2a55"/>
+      <rect x="30" y="12" width="44" height="44" rx="9" fill="#ffffff"/>
+      <use href="#building" x="52" y="34"/>
+      <text x="52" y="76" font-family="Menlo, Consolas, monospace" font-weight="700" font-size="13" fill="#ffffff">team-d</text>
+      <text x="52" y="94" fill="#e6e0f0">pins 0.1.0</text>
+      <text x="52" y="110" fill="#b9aed0">validate · deploy</text>
+    </g>
+  </g>
+  <text font-size="14" fill="#e6e0f0">
+    <tspan x="522" y="438">Same checks for every team and item type. Fix once</tspan>
+    <tspan x="522" y="458">in fabkit, roll out with a version bump.</tspan>
+  </text>
+</svg>
