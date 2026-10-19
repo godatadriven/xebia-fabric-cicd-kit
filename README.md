@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/logo.svg" alt="fabkit logo" width="160"></p>
 
-# xebia-fabric-cicd-kit
+# xebia-fabkit
 
 fabkit is a CI/CD command for Microsoft Fabric, built on Microsoft's [fabric-cicd](https://github.com/microsoft/fabric-cicd). It adds checks that catch configuration mistakes fabric-cicd lets through, and fails deploys that fabric-cicd reports as successful while leaving items broken.
 
@@ -19,7 +19,7 @@ Start a new repository from the [template](templates/fabric-repo/). It has the `
 In an existing repository with a fabric-cicd `config.yml`:
 
 ```bash
-uvx --from xebia-fabric-cicd-kit==0.1.0 fabkit validate
+uvx --from xebia-fabkit==0.9.0 fabkit validate
 ```
 
 ## Commands

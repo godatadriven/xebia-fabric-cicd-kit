@@ -1,6 +1,6 @@
 # The fabkit version for CI and local runs. The pre-commit rev in .pre-commit-config.yaml is bumped with it.
-FABKIT_VERSION := 0.1.0
-FABKIT := uvx --from xebia-fabric-cicd-kit==$(FABKIT_VERSION) fabkit
+FABKIT_VERSION := 0.9.0
+FABKIT := uvx --from xebia-fabkit==$(FABKIT_VERSION) fabkit
 
 .PHONY: help setup validate deploy
 

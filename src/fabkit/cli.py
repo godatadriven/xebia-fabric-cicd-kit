@@ -47,9 +47,7 @@ def run_validate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     """The fabkit argument parser with every subcommand."""
     parser = argparse.ArgumentParser(prog="fabkit")
-    parser.add_argument(
-        "--version", action="version", version=f"fabkit {version('xebia-fabric-cicd-kit')}"
-    )
+    parser.add_argument("--version", action="version", version=f"fabkit {version('xebia-fabkit')}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     hook = subparsers.add_parser(
