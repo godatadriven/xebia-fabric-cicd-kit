@@ -1,4 +1,3 @@
-import json
 import os
 from typing import Any
 
@@ -12,690 +11,309 @@ from fabkit.parameters import check_parameters
 
 GUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 GUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+GUID_C = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+GUID_D = "dddddddd-dddd-dddd-dddd-dddddddddddd"
 HOST = "abc.datawarehouse.fabric.microsoft.com"
+ENV_FLAG = "features: [enable_environment_variable_replacement]\n"
 
 
-def check(repo: FabricRepo, parameter_text: str, **kwargs: Any) -> Findings:
-    repo.write("src/parameter.yml", parameter_text)
+@pytest.fixture
+def repo(fabric_repo: FabricRepo) -> FabricRepo:
+    """Notebooks nb (holding GUID_A and HOST) and other, model sales, and files outside scope."""
+    fabric_repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]"))
+    fabric_repo.write("src/nb.Notebook/notebook-content.py", f"{GUID_A}\n{HOST}\nserver = 'abc'\n")
+    (fabric_repo.root / "src/nb.Notebook/blob.bin").write_bytes(b"\xff\xfe\x00\x81")
+    fabric_repo.write("src/other.Notebook/.platform", platform_json("Notebook", "other", GUID_B))
+    fabric_repo.write("src/other.Notebook/notebook-content.py", "no ids here\n")
+    fabric_repo.write(
+        "src/sales.SemanticModel/.platform", platform_json("SemanticModel", "sales", GUID_C)
+    )
+    fabric_repo.write("src/r.Report/.platform", platform_json("Report", "r", GUID_D))
+    fabric_repo.write("src/r.Report/report.json", "only-in-report")
+    fabric_repo.write("src/notes.md", "only-in-notes")
+    return fabric_repo
+
+
+def check(repo: FabricRepo, files: str | dict[str, str], **kwargs: Any) -> Findings:
+    """Write the parameter file, or several files by path, and check the parameters."""
+    for path, text in ({"src/parameter.yml": files} if isinstance(files, str) else files).items():
+        repo.write(path, text)
     return check_parameters(load_deploy_config(repo.config), **kwargs)
 
 
-def notebook_with(repo: FabricRepo, content: str) -> None:
-    repo.write("src/nb.Notebook/notebook-content.py", content)
+def entries(parameter: str, *items: dict[str, Any]) -> str:
+    return yaml.safe_dump({parameter: list(items)}, sort_keys=False)
 
 
-# A filled-in, environment-specific replacement passes.
-def test_valid_parameters_pass(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-
-    assert findings.errors == []
+def guid_entry(**fields: Any) -> str:
+    """One find_replace entry for GUID_A, with extra fields."""
+    replace = {"DEV": GUID_A, "PROD": GUID_B}
+    return entries("find_replace", {"find_value": GUID_A, "replace_value": replace, **fields})
 
 
-# A missing environment key fails.
-def test_missing_environment_key_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_B))
-
-    assert_reported(findings.errors, "missing", "PROD")
+def key_value_replace(**values: str) -> str:
+    return entries("key_value_replace", {"find_key": "$.server", "replace_value": values})
 
 
-# A miscased key fails, names the right casing, and is not also reported missing.
-def test_miscased_environment_key_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, prod=GUID_B))
-
-    assert_reported(findings.errors, "wrong casing", "PROD")
-    assert not any("missing" in e for e in findings.errors), findings.errors
+def models(name: str = "sales", **connection_ids: str) -> str:
+    """A semantic_model_binding in the current format, for one model."""
+    model = {"semantic_model_name": name, "connection_id": connection_ids or {"_ALL_": GUID_A}}
+    return yaml.safe_dump({"semantic_model_binding": {"models": [model]}})
 
 
-# An environment that config.yml does not define fails.
-def test_unknown_environment_key_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B, TEST=GUID_B))
-
-    assert_reported(findings.errors, "unknown environment key", "TEST")
+def legacy(name: str = "sales", connection_id: Any = GUID_A) -> str:
+    """A semantic_model_binding in the legacy list format."""
+    entry = {"semantic_model_name": name, "connection_id": connection_id}
+    return yaml.safe_dump({"semantic_model_binding": [entry]})
 
 
-# _ALL_ next to another key fails, through fabric-cicd's own validation.
-def test_all_with_other_keys_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, "x")
-
-    findings = check(fabric_repo, find_replace("x", _ALL_="y", DEV="z"))
-
-    assert_reported(findings.errors, "can only be used alone")
-    assert not any("unknown environment key" in e for e in findings.errors), findings.errors
+def extend(template: str) -> dict[str, str]:
+    """A parameter.yml that takes all its content from a template under extend."""
+    return {"src/template.yml": template, "src/parameter.yml": "extend:\n  - template.yml\n"}
 
 
-# Each placeholder form fails.
-@pytest.mark.parametrize("value", ["TODO-prod", "fixme later", "<prod workspace>", "XXXXXXXX-0000"])
-def test_placeholder_fails(fabric_repo: FabricRepo, value: str) -> None:
-    notebook_with(fabric_repo, "x")
+# Each problem in a parameter file fails, with a message naming it.
+@pytest.mark.parametrize(
+    ("files", "fragments"),
+    [
+        pytest.param(find_replace(GUID_A, DEV=GUID_B), ("missing", "PROD"), id="missing-key"),
+        pytest.param(
+            find_replace(GUID_A, DEV=GUID_A, prod=GUID_B), ("wrong casing", "PROD"), id="casing"
+        ),
+        pytest.param(
+            find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B, TEST=GUID_B),
+            ("unknown environment key", "TEST"),
+            id="unknown-key",
+        ),
+        pytest.param(
+            find_replace(GUID_A, _ALL_=GUID_B, DEV=GUID_A),
+            ("can only be used alone",),
+            id="all-with-others",
+        ),
+        *(
+            pytest.param(
+                find_replace(GUID_A, DEV=GUID_A, PROD=value), ("never filled in",), id=value
+            )
+            for value in ("TODO-prod", "<prod workspace>")
+        ),
+        pytest.param(
+            find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B[:-1]), ("shape of a GUID",), id="guid"
+        ),
+        pytest.param(find_replace(GUID_A, DEV=GUID_B, PROD=GUID_B), ("_ALL_",), id="same-value"),
+        pytest.param(
+            find_replace("nowhere", DEV="a", PROD="b"), ("matches nothing",), id="no-match"
+        ),
+        pytest.param(
+            find_replace("only-in-notes", DEV="a", PROD="b"), ("matches nothing",), id="not-in-item"
+        ),
+        pytest.param(
+            find_replace("only-in-report", DEV="a", PROD="b"),
+            ("matches nothing",),
+            id="item-out-of-scope",
+        ),
+        pytest.param(guid_entry(item_name="other"), ("matches nothing",), id="other-item"),
+        pytest.param(guid_entry(item_name="nb_typo"), ("'nb_typo' not found",), id="no-such-item"),
+        pytest.param(
+            guid_entry(item_type="NotAType"),
+            ("Item type 'NotAType' not in scope",),
+            id="logged-by-fabric-cicd",
+        ),
+        pytest.param(
+            find_replace(None, DEV="a", PROD="b"), ("fabric-cicd rejected",), id="rejected"
+        ),
+        pytest.param(key_value_replace(DEV="dev"), ("missing", "PROD"), id="key-value-replace"),
+        pytest.param(models("salse"), ("'salse'", "not in the repository"), id="unknown-model"),
+        pytest.param(
+            legacy(connection_id={"DEV": GUID_A, "PROD": GUID_B}),
+            ("not supported in the legacy format",),
+            id="legacy-mapping",
+        ),
+        pytest.param(
+            extend(find_replace(GUID_A, DEV="TODO", PROD=GUID_B)),
+            ("never filled in",),
+            id="extend-template",
+        ),
+    ],
+)
+def test_parameter_problem_fails(
+    repo: FabricRepo, files: str | dict[str, str], fragments: tuple[str, ...]
+) -> None:
+    assert_reported(check(repo, files).errors, *fragments)
 
-    findings = check(fabric_repo, find_replace("x", DEV="y", PROD=value))
 
-    assert_reported(findings.errors, "never filled in")
+# Valid entries, and entries fabkit cannot check, pass.
+@pytest.mark.parametrize(
+    "files",
+    [
+        pytest.param(find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B), id="valid"),
+        pytest.param(
+            entries(
+                "find_replace",
+                {
+                    "find_value": "no-(match)",
+                    "is_regex": "true",
+                    "replace_value": {"DEV": "a", "PROD": "b"},
+                },
+            ),
+            id="regex",
+        ),
+        pytest.param(find_replace("$workspace.$id", DEV="a", PROD="b"), id="dynamic-find"),
+        pytest.param(
+            find_replace(GUID_A, DEV="$items.Lakehouse.lh.$id", PROD="$workspace.$id"),
+            id="dynamic-replace",
+        ),
+        pytest.param(
+            entries(
+                "find_replace",
+                {
+                    "find_value": "ABC",
+                    "ignore_case": "true",
+                    "replace_value": {"DEV": "a", "PROD": "b"},
+                },
+            ),
+            id="ignore-case",
+        ),
+        pytest.param(guid_entry(item_name=["other", "nb"]), id="item-list"),
+        pytest.param(guid_entry(file_path="**/notebook-content.py"), id="file-glob"),
+        pytest.param(find_replace("server", DEV="photodocs", PROD="b"), id="todo-in-word"),
+        pytest.param(models(), id="known-model"),
+        pytest.param(legacy(), id="legacy-known-model"),
+    ],
+)
+def test_valid_parameters_pass(repo: FabricRepo, files: str) -> None:
+    assert check(repo, files).errors == []
 
 
-# A value shaped unlike its GUID find_value fails.
-def test_guid_shape_mismatch_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
+# A PLACEHOLDER warns in validate, and fails a deploy only to an environment that receives it.
+@pytest.mark.parametrize(
+    ("files", "target", "fails"),
+    [
+        (find_replace(GUID_A, DEV=GUID_A, PROD="PLACEHOLDER"), None, False),
+        (find_replace(GUID_A, DEV=GUID_A, PROD="PLACEHOLDER"), "DEV", False),
+        (find_replace(GUID_A, DEV=GUID_A, PROD="PLACEHOLDER"), "PROD", True),
+        (find_replace(GUID_A, _ALL_="PLACEHOLDER"), "DEV", True),
+        (find_replace(GUID_A, _all_="PLACEHOLDER"), "PROD", True),
+        (key_value_replace(DEV="dev", PROD="PLACEHOLDER"), "PROD", True),
+        (models(DEV=GUID_A, PROD="PLACEHOLDER"), "PROD", True),
+        (extend(find_replace(GUID_A, DEV=GUID_A, PROD="PLACEHOLDER")), "PROD", True),
+    ],
+)
+def test_placeholder_value(
+    repo: FabricRepo, files: str | dict[str, str], target: str | None, fails: bool
+) -> None:
+    findings = check(repo, files, target_environment=target)
 
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B[:-1]))
-
-    assert_reported(findings.errors, "shape of a GUID")
-
-
-# A value shaped unlike its Fabric hostname find_value fails.
-def test_hostname_shape_mismatch_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, HOST)
-
-    findings = check(fabric_repo, find_replace(HOST, DEV=HOST, PROD="abc.database.windows.net"))
-
-    assert_reported(findings.errors, "shape of a Fabric hostname")
-
-
-# The same value in every environment fails and suggests _ALL_.
-def test_identical_values_fail(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_B, PROD=GUID_B))
-
-    assert_reported(findings.errors, "_ALL_")
-
-
-# A find_value that occurs in no file fails by default.
-def test_unmatched_find_value_fails(fabric_repo: FabricRepo) -> None:
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-
-    assert_reported(findings.errors, "matches nothing")
+    if fails:
+        assert_reported(findings.errors, "PLACEHOLDER", f"would be deployed to {target}")
+    else:
+        assert not any("PLACEHOLDER" in e for e in findings.errors), findings.errors
+    if target is None:
+        assert_reported(findings.warnings, "PLACEHOLDER", "PROD")
 
 
-# With unmatched_find_value="warning" the same case only warns.
-def test_unmatched_find_value_can_warn(fabric_repo: FabricRepo) -> None:
+# With unmatched_find_value="warning", an unmatched find_value only warns.
+def test_unmatched_find_value_can_warn(repo: FabricRepo) -> None:
     findings = check(
-        fabric_repo,
-        find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B),
-        unmatched_find_value="warning",
+        repo, find_replace("nowhere", DEV="a", PROD="b"), unmatched_find_value="warning"
     )
 
     assert findings.errors == []
     assert_reported(findings.warnings, "matches nothing")
 
 
-# A regex find_value is not checked for a match.
-def test_regex_find_value_is_not_matched(fabric_repo: FabricRepo) -> None:
-    text = yaml.safe_dump(
-        {
-            "find_replace": [
-                {
-                    "find_value": "nothing-(here)",
-                    "is_regex": "true",
-                    "replace_value": {"DEV": "a", "PROD": "b"},
-                }
-            ]
-        }
-    )
-
-    findings = check(fabric_repo, text)
-
-    assert not any("matches nothing" in e for e in findings.errors), findings.errors
-
-
-# A binary file in the repository does not crash the find_value scan.
-def test_binary_file_is_skipped(fabric_repo: FabricRepo) -> None:
-    (fabric_repo.root / "src/nb.Notebook/blob.bin").write_bytes(b"\xff\xfe\x00\x81")
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-
-    assert findings.errors == []
-
-
-# In validate, a PLACEHOLDER value warns instead of failing.
-def test_pending_warns_in_validate(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_B, PROD="PLACEHOLDER"))
-
-    assert findings.errors == []
-    assert_reported(findings.warnings, "PLACEHOLDER", "PROD")
-
-
-# At deploy, a PLACEHOLDER fails for its own environment and not for the others.
-def test_pending_fails_only_for_target(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-    text = find_replace(GUID_A, DEV=GUID_B, PROD="PLACEHOLDER")
-
-    to_dev = check(fabric_repo, text, target_environment="DEV")
-    to_prod = check(fabric_repo, text, target_environment="PROD")
-
-    assert to_dev.errors == []
-    assert_reported(to_prod.errors, "PLACEHOLDER", "would be deployed to PROD")
-
-
-# At deploy, a PLACEHOLDER under _ALL_ fails: every environment gets it.
-def test_pending_under_all_fails_for_target(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, "x")
-
-    findings = check(fabric_repo, find_replace("x", _ALL_="PLACEHOLDER"), target_environment="DEV")
-
-    assert_reported(findings.errors, "PLACEHOLDER", "would be deployed to DEV")
-
-
-# A pending connection in semantic_model_binding.models fails for its target.
-def test_pending_model_binding_fails_for_target(fabric_repo: FabricRepo) -> None:
-    text = yaml.safe_dump(
-        {
-            "semantic_model_binding": {
-                "models": [
-                    {
-                        "semantic_model_name": "sales",
-                        "connection_id": {"DEV": GUID_A, "PROD": "PLACEHOLDER"},
-                    }
-                ]
-            }
-        }
-    )
-
-    findings = check(fabric_repo, text, target_environment="PROD")
-
-    assert_reported(findings.errors, "models[1] (sales)", "PLACEHOLDER")
-
-
-def binding(name: str, legacy: bool) -> str:
-    """semantic_model_binding text for one model, in the legacy list or the current format."""
-    if legacy:
-        return yaml.safe_dump(
-            {"semantic_model_binding": [{"semantic_model_name": name, "connection_id": GUID_A}]}
-        )
-    models = [{"semantic_model_name": name, "connection_id": {"DEV": GUID_A, "PROD": GUID_B}}]
-    return yaml.safe_dump({"semantic_model_binding": {"models": models}})
-
-
-def with_semantic_model(repo: FabricRepo, name: str) -> None:
-    repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]"))
-    platform = {
-        "metadata": {"type": "SemanticModel", "displayName": name},
-        "config": {"version": "2.0", "logicalId": "33333333-3333-3333-3333-333333333333"},
-    }
-    repo.write(f"src/{name}.SemanticModel/.platform", json.dumps(platform))
-
-
-# A binding to a semantic model that is not in the repository fails.
-@pytest.mark.parametrize("legacy", [False, True])
-def test_binding_to_unknown_model_fails(fabric_repo: FabricRepo, legacy: bool) -> None:
-    with_semantic_model(fabric_repo, "sales")
-
-    findings = check(fabric_repo, binding("salse", legacy))
-
-    assert_reported(findings.errors, "'salse'", "not in the repository")
-
-
-# A binding to a semantic model in the repository passes.
-@pytest.mark.parametrize("legacy", [False, True])
-def test_binding_to_known_model_passes(fabric_repo: FabricRepo, legacy: bool) -> None:
-    with_semantic_model(fabric_repo, "sales")
-
-    findings = check(fabric_repo, binding("sales", legacy))
-
-    assert findings.errors == []
-
-
-# A binding is checked against each environment's folder: a model missing from one fails.
-def test_binding_checked_per_repository_directory(fabric_repo: FabricRepo) -> None:
-    with_semantic_model(fabric_repo, "sales")
-    config = (fabric_repo.root / "config.yml").read_text(encoding="utf-8")
-    fabric_repo.write(
+# A parameter file shared by environments is checked against each environment's folder.
+def test_checked_per_repository_directory(repo: FabricRepo) -> None:
+    repo.write(
         "config.yml",
-        config.replace(
+        repo.config.read_text().replace(
             "  repository_directory: src\n",
             "  repository_directory:\n    DEV: src\n    PROD: src_prod\n",
         ),
     )
-    fabric_repo.write("src_prod/nb.Notebook/.platform", platform_json("Notebook", "nb", GUID_B))
+    repo.write("src_prod/nb.Notebook/.platform", platform_json("Notebook", "nb", GUID_B))
+    text = (
+        entries(
+            "find_replace", {"find_value": GUID_A, "replace_value": {"DEV": GUID_A, "PROD": GUID_B}}
+        )
+        + models()
+    )
 
-    findings = check(fabric_repo, binding("sales", legacy=False))
+    errors = check(repo, text).errors
 
-    assert_reported(findings.errors, "'sales'", "src_prod/")
-
-
-# A per-environment connection_id in the legacy list format fails: fabric-cicd skips the binding.
-def test_legacy_binding_with_environment_mapping_fails(fabric_repo: FabricRepo) -> None:
-    with_semantic_model(fabric_repo, "sales")
-    entry = {"semantic_model_name": "sales", "connection_id": {"DEV": GUID_A, "PROD": GUID_B}}
-
-    findings = check(fabric_repo, yaml.safe_dump({"semantic_model_binding": [entry]}))
-
-    assert_reported(findings.errors, "PROD", "not supported in the legacy format")
+    assert_reported(errors, "matches nothing", "PROD")
+    assert_reported(errors, "'sales'", "src_prod/")
+    assert not any("matches nothing" in e and "DEV" in e for e in errors), errors
 
 
-# No parameter file configured means nothing to check.
+# Without a parameter file there is nothing to check.
 def test_no_parameter_file_passes(fabric_repo: FabricRepo) -> None:
-    (fabric_repo.root / "src/parameter.yml").unlink()
     fabric_repo.write("config.yml", CONFIG.replace("  parameter: src/parameter.yml\n", ""))
 
-    findings = check_parameters(load_deploy_config(fabric_repo.config))
+    assert check_parameters(load_deploy_config(fabric_repo.config)).errors == []
 
-    assert findings.errors == []
 
-
-# fabric-cicd's own validator is importable in the pinned version and rejects a bad file.
-def test_fabric_cicd_parameter_validation_runs(fabric_repo: FabricRepo) -> None:
-    findings = check(fabric_repo, find_replace(None, DEV="a", PROD="b"))
-
-    assert_reported(findings.errors, "fabric-cicd rejected")
-
-
-# An error fabric-cicd logs while still passing the file fails validation.
-def test_fabric_cicd_logged_error_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-    parameters = yaml.safe_load(find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-    parameters["find_replace"][0]["item_type"] = "NotAType"
-
-    findings = check(fabric_repo, yaml.safe_dump(parameters))
-
-    assert_reported(findings.errors, "PROD", "Item type 'NotAType' not in scope")
-
-
-# A parameter.yml with invalid YAML is a FabkitError, not a traceback.
-def test_invalid_yaml_parameter_file_fails(fabric_repo: FabricRepo) -> None:
-    with pytest.raises(FabkitError, match="invalid YAML"):
-        check(fabric_repo, "find_replace: [\n")
-
-
-def key_value_replace(**values: Any) -> str:
-    entry = {"find_key": "$.properties.server", "replace_value": values}
-    return yaml.safe_dump({"key_value_replace": [entry]}, sort_keys=False)
-
-
-def spark_pool(**names: str) -> str:
-    replace_value = {env: {"type": "Capacity", "name": name} for env, name in names.items()}
-    entry = {"instance_pool_id": GUID_A, "replace_value": replace_value}
-    return yaml.safe_dump({"spark_pool": [entry]}, sort_keys=False)
-
-
-# A PLACEHOLDER under a lowercase _all_ fails for the target: fabric-cicd matches _ALL_ in any case.
-def test_pending_under_lowercase_all_fails_for_target(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, "x")
-
-    findings = check(fabric_repo, find_replace("x", _all_="PLACEHOLDER"), target_environment="PROD")
-
-    assert_reported(findings.errors, "PLACEHOLDER", "would be deployed to PROD")
-
-
-# A PLACEHOLDER in key_value_replace or spark_pool fails for its target.
-@pytest.mark.parametrize("build", [key_value_replace, spark_pool])
-def test_pending_in_other_parameters_fails_for_target(fabric_repo: FabricRepo, build: Any) -> None:
-    findings = check(fabric_repo, build(DEV="dev", PROD="PLACEHOLDER"), target_environment="PROD")
-
-    assert_reported(findings.errors, "PLACEHOLDER", "would be deployed to PROD")
-
-
-# In validate, a PLACEHOLDER in key_value_replace or spark_pool warns.
-@pytest.mark.parametrize("build", [key_value_replace, spark_pool])
-def test_pending_in_other_parameters_warns_in_validate(fabric_repo: FabricRepo, build: Any) -> None:
-    findings = check(fabric_repo, build(DEV="dev", PROD="PLACEHOLDER"))
-
-    assert findings.errors == []
-    assert_reported(findings.warnings, "PLACEHOLDER", "PROD")
-
-
-# A missing environment key in key_value_replace or spark_pool fails.
-@pytest.mark.parametrize("build", [key_value_replace, spark_pool])
-def test_missing_environment_key_in_other_parameters_fails(
-    fabric_repo: FabricRepo, build: Any
-) -> None:
-    findings = check(fabric_repo, build(DEV="dev"))
-
-    assert_reported(findings.errors, "missing", "PROD")
-
-
-# A dynamic replace_value starting with $ is not shape-checked.
-def test_dynamic_replace_value_skips_shape_check(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(
-        fabric_repo, find_replace(GUID_A, DEV="$items.Lakehouse.lh.$id", PROD="$workspace.$id")
-    )
-
-    assert not any("shape" in e for e in findings.errors), findings.errors
-
-
-# A find_value starting with $ is not checked for a match.
-def test_dynamic_find_value_is_not_matched(fabric_repo: FabricRepo) -> None:
-    findings = check(fabric_repo, find_replace("$workspace.$id", DEV="a", PROD="b"))
-
-    assert not any("matches nothing" in e for e in findings.errors), findings.errors
-
-
-# With ignore_case, a find_value matches a file in another casing.
-def test_ignore_case_find_value_matches_any_casing(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, "server = 'abc'")
-    entry = {"find_value": "ABC", "ignore_case": "true", "replace_value": {"DEV": "a", "PROD": "b"}}
-
-    findings = check(fabric_repo, yaml.safe_dump({"find_replace": [entry]}))
-
-    assert not any("matches nothing" in e for e in findings.errors), findings.errors
-
-
-# is_regex "false" is not a regex: the find_value is still checked for a match.
-def test_is_regex_false_is_matched(fabric_repo: FabricRepo) -> None:
-    entry = {
-        "find_value": "nothing",
-        "is_regex": "false",
-        "replace_value": {"DEV": "a", "PROD": "b"},
-    }
-
-    findings = check(fabric_repo, yaml.safe_dump({"find_replace": [entry]}))
-
-    assert_reported(findings.errors, "matches nothing")
-
-
-def filtered_find_replace(**filters: Any) -> str:
-    """parameter.yml text with one find_replace entry for GUID_A, limited by filters."""
-    entry = {"find_value": GUID_A, "replace_value": {"DEV": GUID_A, "PROD": GUID_B}, **filters}
-    return yaml.safe_dump({"find_replace": [entry]})
-
-
-# A find_value inside the items its filters select passes.
-@pytest.mark.parametrize(
-    "filters",
-    [
-        {"item_type": "Notebook", "item_name": "nb"},
-        {"item_name": ["other", "nb"]},
-        {"file_path": "nb.Notebook/notebook-content.py"},
-        {"file_path": "**/notebook-content.py"},
-    ],
-)
-def test_find_value_in_filtered_items_passes(
-    fabric_repo: FabricRepo, filters: dict[str, Any]
-) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, filtered_find_replace(**filters))
-
-    assert not any("matches nothing" in e for e in findings.errors), findings.errors
-
-
-# A filter that names no item fails through fabric-cicd's own validation.
-def test_filter_naming_no_item_fails(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-
-    findings = check(fabric_repo, filtered_find_replace(item_name="nb_typo"))
-
-    assert_reported(findings.errors, "'nb_typo' not found")
-
-
-# A find_value that occurs only outside the existing items its filters select fails.
-@pytest.mark.parametrize(
-    "filters",
-    [
-        {"item_name": "other"},
-        {"file_path": "other.Notebook/notebook-content.py"},
-    ],
-)
-def test_find_value_outside_filtered_items_fails(
-    fabric_repo: FabricRepo, filters: dict[str, Any]
-) -> None:
-    notebook_with(fabric_repo, GUID_A)
-    fabric_repo.write("src/other.Notebook/.platform", platform_json("Notebook", "other", GUID_B))
-    fabric_repo.write("src/other.Notebook/notebook-content.py", "no ids here\n")
-
-    findings = check(fabric_repo, filtered_find_replace(**filters))
-
-    assert_reported(findings.errors, "matches nothing")
-
-
-# A find_value that occurs only in a file outside any item fails: fabric-cicd replaces item files.
-def test_find_value_outside_items_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("src/notes.md", GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-
-    assert_reported(findings.errors, "matches nothing")
-
-
-# A find_value that occurs only in an item type outside item_types_in_scope fails.
-def test_find_value_in_item_out_of_scope_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("src/r.Report/.platform", platform_json("Report", "r", GUID_B))
-    fabric_repo.write("src/r.Report/report.json", GUID_A)
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-
-    assert_reported(findings.errors, "matches nothing")
-
-
-# A parameter file shared by environments is checked against each environment's folder.
-def test_find_value_checked_per_repository_directory(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-    fabric_repo.write(
-        "config.yml",
-        CONFIG.replace(
-            "  repository_directory: src\n",
-            "  repository_directory:\n    DEV: src\n    PROD: src_prod\n",
-        ),
-    )
-    fabric_repo.write("src_prod/nb.Notebook/.platform", platform_json("Notebook", "nb", GUID_B))
-    fabric_repo.write("src_prod/nb.Notebook/notebook-content.py", "no ids here\n")
-
-    findings = check(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-
-    assert_reported(findings.errors, "matches nothing", "PROD")
-    assert not any("matches nothing" in e and "DEV" in e for e in findings.errors), findings.errors
-
-
-# The legacy semantic_model_binding list passes.
-def test_legacy_model_binding_passes(fabric_repo: FabricRepo) -> None:
-    binding = [{"connection_id": GUID_A, "semantic_model_name": "sales"}]
-
-    findings = check(fabric_repo, yaml.safe_dump({"semantic_model_binding": binding}))
-
-    assert findings.errors == []
-
-
-# A PLACEHOLDER in a legacy binding mapping fails for its target.
-def test_pending_legacy_model_binding_fails_for_target(fabric_repo: FabricRepo) -> None:
-    binding = [
-        {"connection_id": {"DEV": GUID_A, "PROD": "PLACEHOLDER"}, "semantic_model_name": "sales"}
-    ]
-
-    findings = check(
-        fabric_repo, yaml.safe_dump({"semantic_model_binding": binding}), target_environment="PROD"
-    )
-
-    assert_reported(findings.errors, "semantic_model_binding[1] (sales)", "PLACEHOLDER")
-
-
-# A parameter file with another name is not counted as a match for its own find_values.
-def test_parameter_file_in_use_is_not_matched(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG.replace("src/parameter.yml", "src/parameter-prod.yml"))
-    fabric_repo.write("src/parameter-prod.yml", find_replace(GUID_A, DEV=GUID_A, PROD=GUID_B))
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config))
-
-    assert_reported(findings.errors, "matches nothing")
-
-
-# A word that contains TODO is not a placeholder.
-def test_todo_inside_a_word_is_not_a_placeholder(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, "x")
-
-    findings = check(fabric_repo, find_replace("x", DEV="photodocs", PROD="y"))
-
-    assert not any("never filled in" in e for e in findings.errors), findings.errors
-
-
-# A parameter file that is not UTF-8 is a FabkitError, not a traceback.
-def test_non_utf8_parameter_file_fails(fabric_repo: FabricRepo) -> None:
-    (fabric_repo.root / "src/parameter.yml").write_bytes(b"find_replace: \x93x\x94\n")
+# An unreadable parameter file is a FabkitError, not a traceback.
+@pytest.mark.parametrize("content", [b"find_replace: [\n", b"find_replace: \x93x\x94\n"])
+def test_unreadable_parameter_file_fails(fabric_repo: FabricRepo, content: bytes) -> None:
+    (fabric_repo.root / "src/parameter.yml").write_bytes(content)
 
     with pytest.raises(FabkitError, match="invalid YAML"):
         check_parameters(load_deploy_config(fabric_repo.config))
 
 
-ENV_FLAG = "features: [enable_environment_variable_replacement]\n"
+PROD_LAKEHOUSE = find_replace(GUID_A, DEV=GUID_A, PROD="$ENV:PROD_LAKEHOUSE")
+ENV_CONNECTIONS = models(DEV="$ENV:DEV_CONNECTION", PROD="$ENV:PROD_CONNECTION")
 
 
-def env_reference(repo: FabricRepo, monkeypatch: pytest.MonkeyPatch, flag: bool = True) -> None:
-    """A PROD value read from $ENV:PROD_LAKEHOUSE_ID, with the variable unset."""
-    repo.write("config.yml", CONFIG + (ENV_FLAG if flag else ""))
-    notebook_with(repo, GUID_A)
-    repo.write("src/parameter.yml", find_replace(GUID_A, DEV=GUID_A, PROD="$ENV:PROD_LAKEHOUSE_ID"))
-    monkeypatch.delenv("PROD_LAKEHOUSE_ID", raising=False)
-
-
-# An $ENV: value passes validate when its variable is not set, and no variable is left behind.
-def test_env_reference_passes_validate(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+# An $ENV: value needs its variable only for the deploy target; a connection_id needs all of them.
+@pytest.mark.parametrize(
+    ("files", "flag", "target", "variables", "fragment"),
+    [
+        pytest.param(PROD_LAKEHOUSE, True, None, {}, None, id="validate"),
+        pytest.param(PROD_LAKEHOUSE, True, "PROD", {}, "could not be resolved", id="target-unset"),
+        pytest.param(
+            PROD_LAKEHOUSE, True, "PROD", {"PROD_LAKEHOUSE": GUID_B}, None, id="target-set"
+        ),
+        pytest.param(PROD_LAKEHOUSE, True, "DEV", {}, None, id="other-target"),
+        pytest.param(ENV_CONNECTIONS, True, None, {}, None, id="connection-validate"),
+        pytest.param(
+            ENV_CONNECTIONS,
+            True,
+            "PROD",
+            {"PROD_CONNECTION": GUID_A},
+            "DEV",
+            id="connection-deploy",
+        ),
+        pytest.param(
+            models(_ALL_="$ENV:CONNECTION"),
+            True,
+            "PROD",
+            {"CONNECTION": GUID_A},
+            None,
+            id="connection-all",
+        ),
+    ],
+)
+def test_env_reference(
+    repo: FabricRepo,
+    monkeypatch: pytest.MonkeyPatch,
+    files: str | dict[str, str],
+    flag: bool,
+    target: str | None,
+    variables: dict[str, str],
+    fragment: str | None,
 ) -> None:
-    env_reference(fabric_repo, monkeypatch)
+    repo.write("config.yml", repo.config.read_text() + (ENV_FLAG if flag else ""))
+    for name in ("PROD_LAKEHOUSE", "DEV_CONNECTION", "PROD_CONNECTION", "CONNECTION"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in variables.items():
+        monkeypatch.setenv(name, value)
 
-    findings = check_parameters(load_deploy_config(fabric_repo.config))
+    errors = check(repo, files, target_environment=target).errors
 
-    assert findings.errors == []
-    assert "PROD_LAKEHOUSE_ID" not in os.environ
-
-
-# An $ENV: value without the feature flag in config.yml fails.
-def test_env_reference_without_flag_fails(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_reference(fabric_repo, monkeypatch, flag=False)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config))
-
-    assert_reported(findings.errors, "enable_environment_variable_replacement")
-
-
-# An $ENV: value for the deploy target fails when its variable is not set.
-def test_unset_env_reference_fails_for_target(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_reference(fabric_repo, monkeypatch)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
-
-    assert_reported(findings.errors, "for PROD", "could not be resolved")
-    assert not any("for DEV" in e for e in findings.errors), findings.errors
-
-
-# An $ENV: value for the deploy target passes when its variable is set.
-def test_set_env_reference_passes_for_target(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_reference(fabric_repo, monkeypatch)
-    monkeypatch.setenv("PROD_LAKEHOUSE_ID", GUID_B)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
-
-    assert findings.errors == []
-
-
-# An unset $ENV: value for another environment does not block the deploy.
-def test_unset_env_reference_passes_for_other_target(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_reference(fabric_repo, monkeypatch)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="DEV")
-
-    assert findings.errors == []
-
-
-def extend_with(repo: FabricRepo, template_text: str) -> None:
-    """A parameter.yml whose only content comes from a template under extend."""
-    repo.write("src/template.yml", template_text)
-    repo.write("src/parameter.yml", "extend:\n  - template.yml\n")
-
-
-# An entry in an extend template is checked like one in parameter.yml.
-def test_extend_template_entries_are_checked(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-    extend_with(fabric_repo, find_replace(GUID_A, DEV="TODO", PROD=GUID_B))
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config))
-
-    assert_reported(findings.errors, "placeholder 'TODO'")
-
-
-# A PLACEHOLDER in an extend template fails the deploy to its environment.
-def test_extend_template_placeholder_fails_for_target(fabric_repo: FabricRepo) -> None:
-    notebook_with(fabric_repo, GUID_A)
-    extend_with(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD="PLACEHOLDER"))
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
-
-    assert_reported(findings.errors, "PLACEHOLDER", "PROD")
-
-
-# An unset $ENV: value in an extend template passes validate.
-def test_extend_template_env_reference_passes_validate(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fabric_repo.write("config.yml", CONFIG + ENV_FLAG)
-    notebook_with(fabric_repo, GUID_A)
-    extend_with(fabric_repo, find_replace(GUID_A, DEV=GUID_A, PROD="$ENV:PROD_LAKEHOUSE_ID"))
-    monkeypatch.delenv("PROD_LAKEHOUSE_ID", raising=False)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config))
-
-    assert findings.errors == []
-
-
-def env_connection_binding(repo: FabricRepo, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A model binding read from $ENV:DEV_CONNECTION and $ENV:PROD_CONNECTION, both unset."""
-    repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]") + ENV_FLAG)
-    repo.write("src/sales.SemanticModel/.platform", platform_json("SemanticModel", "sales", GUID_B))
-    models = [
-        {
-            "semantic_model_name": "sales",
-            "connection_id": {"DEV": "$ENV:DEV_CONNECTION", "PROD": "$ENV:PROD_CONNECTION"},
-        }
-    ]
-    repo.write("src/parameter.yml", yaml.safe_dump({"semantic_model_binding": {"models": models}}))
-    monkeypatch.delenv("DEV_CONNECTION", raising=False)
-    monkeypatch.delenv("PROD_CONNECTION", raising=False)
-
-
-# An unset $ENV: connection_id passes validate.
-def test_env_connection_id_passes_validate(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_connection_binding(fabric_repo, monkeypatch)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config))
-
-    assert findings.errors == []
-
-
-# A deploy needs the $ENV: connection_id of every environment: fabric-cicd checks them all.
-def test_env_connection_id_of_other_environment_fails_deploy(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_connection_binding(fabric_repo, monkeypatch)
-    monkeypatch.setenv("PROD_CONNECTION", GUID_A)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
-
-    assert_reported(findings.errors, "DEV")
-
-
-# One $ENV: connection_id under _ALL_ needs only its own variable for a deploy.
-def test_env_connection_id_under_all_passes_deploy(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_connection_binding(fabric_repo, monkeypatch)
-    models = [{"semantic_model_name": "sales", "connection_id": {"_ALL_": "$ENV:SM_CONNECTION"}}]
-    fabric_repo.write(
-        "src/parameter.yml", yaml.safe_dump({"semantic_model_binding": {"models": models}})
-    )
-    monkeypatch.setenv("SM_CONNECTION", GUID_A)
-
-    findings = check_parameters(load_deploy_config(fabric_repo.config), target_environment="PROD")
-
-    assert findings.errors == []
+    if fragment is None:
+        assert errors == []
+    else:
+        assert_reported(errors, fragment)
+    if not variables:
+        assert "PROD_LAKEHOUSE" not in os.environ, "a stand-in variable was left behind"

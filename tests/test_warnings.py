@@ -48,19 +48,13 @@ def test_fabric_cicd_still_logs_these_texts() -> None:
         )
 
 
-# A matching WARNING and any ERROR are collected; other warnings are not.
-def test_collector_keeps_errors_and_binding_warnings_only() -> None:
+# Inside the block, ERRORs and matching WARNINGs are collected; after it, nothing is.
+def test_collector_keeps_errors_and_fatal_warnings_only() -> None:
     logger = logging.getLogger("fabric_cicd.items")
     with collect_fatal_logs() as collected:
         logger.warning(SAMPLES[0])
         logger.warning("harmless")
         logger.error("publish failed")
-    assert len(collected.messages) == 2
+    logger.error("after")
 
-
-# The collector is removed after the block.
-def test_collector_is_removed_after_block() -> None:
-    with collect_fatal_logs() as collected:
-        pass
-    logging.getLogger("fabric_cicd").error("after")
-    assert collected.messages == []
+    assert collected.messages == [f"{SAMPLES[0]} [warning treated as failure]", "publish failed"]

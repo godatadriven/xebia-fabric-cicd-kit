@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import sys
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -12,7 +11,7 @@ from typing import Any
 
 from fabkit import workspaces
 from fabkit.config import load_deploy_config, require_environment
-from fabkit.errors import FabkitError
+from fabkit.errors import FabkitError, print_warnings
 from fabkit.parameters import GUID_PATTERN
 
 ONELAKE_URL = "https://onelake.dfs.fabric.microsoft.com"
@@ -221,8 +220,7 @@ def run_upload(args: argparse.Namespace) -> int:
     require_environment(config, args.environment)
     upload = Upload(Path(args.source), args.lakehouse, args.target, tuple(args.exclude or ()))
     check_uploads([upload])
-    for warning in upload_warnings(upload):
-        print(f"warning: {warning}", file=sys.stderr)
+    print_warnings(upload_warnings(upload))
 
     credential = workspaces.default_credential()
     workspace_id = workspaces.resolve_workspace_id(credential, config, args.environment)

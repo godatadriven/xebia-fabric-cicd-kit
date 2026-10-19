@@ -1,98 +1,114 @@
+from io import BytesIO
 from typing import Any
+from urllib import error
 
 import pytest
-from helpers import CONFIG, FabricRepo, FakeCredential
+from azure.core.exceptions import ClientAuthenticationError
+from helpers import CONFIG, WORKSPACE_ID, FabricRepo, FakeCredential, FakeFabric
 
 from fabkit import workspaces
 from fabkit.config import load_deploy_config
-from fabkit.connections import FABRIC_API_ROOT
 from fabkit.errors import FabkitError
+from fabkit.workspaces import get_all, request_json
 
 
-# A configured workspace_id is used without an API call.
-def test_resolve_workspace_id_from_config(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fabric_repo.write(
-        "config.yml",
-        CONFIG.replace(
-            "  workspace:\n    DEV: sales-dev\n    PROD: sales-prod\n",
-            "  workspace_id:\n"
-            "    DEV: 11111111-1111-1111-1111-111111111111\n"
-            "    PROD: 22222222-2222-2222-2222-222222222222\n",
+class Response(BytesIO):
+    def __enter__(self) -> "Response":
+        return self
+
+
+def answer(monkeypatch: pytest.MonkeyPatch, outcome: Any) -> list[Any]:
+    """Make urlopen return the bytes, or raise the error. Returns the requests sent."""
+    sent: list[Any] = []
+
+    def urlopen(http_request: Any, **_: Any) -> Response:
+        sent.append(http_request)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return Response(outcome)
+
+    monkeypatch.setattr(workspaces.request, "urlopen", urlopen)
+    return sent
+
+
+# A GET returns the JSON body; a POST sends the JSON body with the bearer token.
+def test_request_json_get_and_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = answer(monkeypatch, b'{"value": [1]}')
+
+    assert request_json("https://x", "token") == {"value": [1]}
+    assert request_json("https://x", "token", body={"a": 1}) == {}
+    assert sent[1].get_method() == "POST"
+    assert sent[1].data == b'{"a": 1}'
+    assert sent[1].get_header("Authorization") == "Bearer token"
+
+
+# A failed request becomes a FabkitError naming the request and the reason.
+@pytest.mark.parametrize(
+    ("outcome", "body", "message"),
+    [
+        (
+            error.HTTPError("https://x", 403, "Forbidden", {}, BytesIO(b"no access")),
+            None,
+            "GET https://x failed with HTTP 403",
         ),
-    )
-
-    def fail(_url: str, _token: str) -> dict[str, Any]:
-        raise AssertionError("must not call the API")
-
-    monkeypatch.setattr(workspaces, "get_json", fail)
-
-    workspace_id = workspaces.resolve_workspace_id(
-        FakeCredential(), load_deploy_config(fabric_repo.config), "DEV"
-    )
-
-    assert workspace_id == "11111111-1111-1111-1111-111111111111"
-
-
-# A workspace name is looked up across result pages.
-def test_resolve_workspace_name_across_pages(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
+        (
+            error.HTTPError("https://x", 401, "Unauthorized", {}, BytesIO(b"no access")),
+            {},
+            "POST https://x failed with HTTP 401",
+        ),
+        (error.URLError("unreachable"), None, "GET https://x failed: .*unreachable"),
+        (b"<html>", None, "Unexpected response"),
+    ],
+)
+def test_request_json_failure(
+    monkeypatch: pytest.MonkeyPatch, outcome: Any, body: Any, message: str
 ) -> None:
+    answer(monkeypatch, outcome)
+
+    with pytest.raises(FabkitError, match=message):
+        request_json("https://x", "token", body=body)
+
+
+# A listing is read across its pages.
+def test_get_all_follows_pages(monkeypatch: pytest.MonkeyPatch) -> None:
     pages = {
-        f"{FABRIC_API_ROOT}/workspaces": {
-            "value": [{"id": "other-guid", "displayName": "other"}],
-            "continuationUri": "next",
-        },
-        "next": {"value": [{"id": "ws-dev-guid", "displayName": "sales-dev"}]},
+        "https://x/1": {"value": [1], "continuationUri": "https://x/2"},
+        "https://x/2": {"value": [2]},
     }
-    monkeypatch.setattr(workspaces, "get_json", lambda url, _token: pages[url])
+    monkeypatch.setattr(workspaces, "request_json", lambda url, _token: pages[url])
 
-    workspace_id = workspaces.resolve_workspace_id(
-        FakeCredential(), load_deploy_config(fabric_repo.config), "DEV"
-    )
-
-    assert workspace_id == "ws-dev-guid"
+    assert get_all(FakeCredential(), "https://x/1") == [1, 2]
 
 
-# An unknown workspace name fails, naming the workspace.
-def test_resolve_unknown_workspace_fails(
-    fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(workspaces, "get_json", lambda _url, _token: {"value": []})
+# A failed Azure login becomes a FabkitError.
+def test_login_failure_fails() -> None:
+    class FailingCredential:
+        def get_token(self, *_: Any) -> Any:
+            raise ClientAuthenticationError("no secret")
 
-    with pytest.raises(FabkitError, match="sales-dev"):
-        workspaces.resolve_workspace_id(
-            FakeCredential(), load_deploy_config(fabric_repo.config), "DEV"
-        )
-
-
-WORKSPACE = "dddddddd-0000-0000-0000-000000000004"
-LAKEHOUSES_URL = f"{FABRIC_API_ROOT}/workspaces/{WORKSPACE}/lakehouses"
+    with pytest.raises(FabkitError, match="Azure login failed") as raised:
+        get_all(FailingCredential(), "https://x")
+    assert raised.value.details == ["no secret"]
 
 
-# A lakehouse name is looked up in the workspace, across result pages.
-def test_resolve_lakehouse_name_across_pages(monkeypatch: pytest.MonkeyPatch) -> None:
-    pages = {
-        LAKEHOUSES_URL: {
-            "value": [{"id": "other-guid", "displayName": "lh_other"}],
-            "continuationUri": "next",
-        },
-        "next": {"value": [{"id": "lh-guid", "displayName": "lh_landing"}]},
-    }
-    monkeypatch.setattr(workspaces, "get_json", lambda url, _token: pages[url])
+# A workspace_id is used as is; a workspace name is looked up, and an unknown one fails.
+def test_resolve_workspace_id(fabric_repo: FabricRepo, fabric: FakeFabric) -> None:
+    by_name = load_deploy_config(fabric_repo.config)
+    fabric_repo.write("config.yml", CONFIG.replace("workspace:", "workspace_id:"))
+    by_id = load_deploy_config(fabric_repo.config)
 
-    lakehouse_id = workspaces.resolve_lakehouse_id(FakeCredential(), WORKSPACE, "lh_landing")
-
-    assert lakehouse_id == "lh-guid"
+    assert workspaces.resolve_workspace_id(FakeCredential(), by_id, "DEV") == "sales-dev"
+    assert fabric.requested == []
+    assert workspaces.resolve_workspace_id(FakeCredential(), by_name, "DEV") == WORKSPACE_ID
+    with pytest.raises(FabkitError, match="'sales-prod' not found"):
+        workspaces.resolve_workspace_id(FakeCredential(), by_name, "PROD")
 
 
-# An unknown lakehouse name fails, listing the lakehouses that exist.
-def test_resolve_unknown_lakehouse_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    body = {"value": [{"id": "a", "displayName": "lh_a"}, {"id": "b", "displayName": "lh_b"}]}
-    monkeypatch.setattr(workspaces, "get_json", lambda _url, _token: body)
+# A lakehouse is found by name; an unknown one fails, listing the lakehouses that exist.
+def test_resolve_lakehouse_id(fabric: FakeFabric) -> None:
+    lakehouse_id = workspaces.resolve_lakehouse_id(FakeCredential(), WORKSPACE_ID, "lh_landing")
 
-    with pytest.raises(FabkitError, match="lh_landing") as raised:
-        workspaces.resolve_lakehouse_id(FakeCredential(), WORKSPACE, "lh_landing")
-
-    assert raised.value.details == ["Lakehouses in the workspace: lh_a, lh_b"]
+    assert lakehouse_id == fabric.lakehouses[0]["id"]
+    with pytest.raises(FabkitError, match="'lh_x' not found") as raised:
+        workspaces.resolve_lakehouse_id(FakeCredential(), WORKSPACE_ID, "lh_x")
+    assert raised.value.details == ["Lakehouses in the workspace: lh_landing"]

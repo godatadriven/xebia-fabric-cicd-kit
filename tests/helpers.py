@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,8 @@ from typing import Any
 
 import yaml
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
+
+from fabkit.errors import FabkitError
 
 CONFIG = """\
 core:
@@ -172,23 +175,52 @@ class FakeOneLake:
 
 
 CONN = "eeeeeeee-0000-0000-0000-000000000005"
+WORKSPACE_ID = "dddddddd-0000-0000-0000-000000000004"
 LAKEHOUSE_NAME = "lh_landing"
 LAKEHOUSE_ID = "cccccccc-0000-0000-0000-000000000003"
 
 
 class FakeFabric:
-    """Stands in for Fabric and OneLake, and records what fabkit asked of them."""
+    """Stands in for the Fabric API, fabric-cicd's deploy and OneLake, and records the calls.
+
+    calls lists the takeover POSTs and the deploys, in order.
+    on_deploy runs inside the deploy, e.g. to log or raise as fabric-cicd would.
+    """
 
     def __init__(self) -> None:
-        self.deploys: list[dict[str, Any]] = []
-        self.connection_lookups = 0
-        self.visible_connections = {CONN: "warehouse"}
-        self.workspaces = [{"id": "ws-dev-guid", "displayName": "sales-dev"}]
+        self.connections = [{"id": CONN, "displayName": "warehouse"}]
+        self.workspaces = [{"id": WORKSPACE_ID, "displayName": "sales-dev"}]
         self.lakehouses = [{"id": LAKEHOUSE_ID, "displayName": LAKEHOUSE_NAME}]
+        self.semantic_models: list[dict[str, str]] = []
+        self.refuse_posts = False
+        self.on_deploy: Callable[[], None] | None = None
+        self.requested: list[str] = []
+        self.calls: list[str] = []
+        self.deploys: list[dict[str, Any]] = []
         self.onelake = FakeOneLake()
 
-    def get_json(self, url: str, _token: str) -> dict[str, Any]:
-        """Workspace and lakehouse listings, one page each."""
-        if url.endswith("/lakehouses"):
-            return {"value": self.lakehouses}
-        return {"value": self.workspaces}
+    def request_json(self, url: str, _token: str, body: Any = None) -> dict[str, Any]:
+        """One page per listing; a POST is recorded, or refused."""
+        self.requested.append(url)
+        if body is not None:
+            if self.refuse_posts:
+                raise FabkitError(f"POST {url} failed with HTTP 401.", ["no access"])
+            self.calls.append(url)
+            return {}
+        listings = {
+            "/connections": self.connections,
+            "/lakehouses": self.lakehouses,
+            "/workspaces": self.workspaces,
+            "?type=SemanticModel": self.semantic_models,
+        }
+        return {"value": next(v for suffix, v in listings.items() if url.endswith(suffix))}
+
+    def deploy(self, **kwargs: Any) -> None:
+        self.calls.append("deploy")
+        self.deploys.append(kwargs)
+        if self.on_deploy:
+            self.on_deploy()
+
+    @property
+    def connection_lookups(self) -> int:
+        return sum(url.endswith("/connections") for url in self.requested)
