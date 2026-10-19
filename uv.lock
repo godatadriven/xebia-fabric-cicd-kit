@@ -1001,8 +1001,8 @@ wheels = [
 ]
 
 [[package]]
-name = "xebia-fabric-cicd-kit"
-version = "0.1.0"
+name = "xebia-fabkit"
+version = "0.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "azure-identity" },

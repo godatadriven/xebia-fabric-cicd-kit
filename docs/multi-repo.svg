@@ -127,7 +127,7 @@
       <rect x="30" y="12" width="44" height="44" rx="9" fill="#ffffff"/>
       <use href="#building" x="52" y="34"/>
       <text x="52" y="76" font-family="Menlo, Consolas, monospace" font-weight="700" font-size="13" fill="#ffffff">team-d</text>
-      <text x="52" y="94" fill="#e6e0f0">pins 0.1.0</text>
+      <text x="52" y="94" fill="#e6e0f0">pins 0.9.0</text>
       <text x="52" y="110" fill="#b9aed0">validate · deploy</text>
     </g>
   </g>

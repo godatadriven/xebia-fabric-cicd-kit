@@ -93,7 +93,7 @@ def test_version_prints_installed_version(capsys: pytest.CaptureFixture[str]) ->
         main(["--version"])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == f"fabkit {version('xebia-fabric-cicd-kit')}"
+    assert capsys.readouterr().out.strip() == f"fabkit {version('xebia-fabkit')}"
 
 
 # A FabkitError is printed with its details, without a traceback, and exits 1.

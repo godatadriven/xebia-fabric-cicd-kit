@@ -1,6 +1,6 @@
 # Fabric repository template
 
-Starting point for a Microsoft Fabric repository with CI/CD from [xebia-fabric-cicd-kit](../../README.md) (`fabkit`): a validate check on pull requests, a deploy on push to `dev`, `preprod` and `main`, and pre-commit hooks.
+Starting point for a Microsoft Fabric repository with CI/CD from [xebia-fabkit](../../README.md) (`fabkit`): a validate check on pull requests, a deploy on push to `dev`, `preprod` and `main`, and pre-commit hooks.
 
 ## Start
 
