@@ -1,237 +1,108 @@
-from typing import Any
-
 import pytest
-from helpers import CONFIG, FabricRepo, FakeCredential, platform_json
+from helpers import CONFIG, WORKSPACE_ID, FabricRepo, FakeCredential, FakeFabric, platform_json
 
-from fabkit import takeover
 from fabkit.config import load_deploy_config
-from fabkit.connections import FABRIC_API_ROOT, POWER_BI_API_ROOT
-from fabkit.errors import FabkitError
+from fabkit.errors import Findings
 from fabkit.takeover import take_over_semantic_models
+from fabkit.workspaces import POWER_BI_API_ROOT
 
-ITEMS_URL = f"{FABRIC_API_ROOT}/workspaces/ws-guid/items?type=SemanticModel"
-
-
-class FakeApi:
-    """Workspace items by page URL, and the takeover URLs posted."""
-
-    def __init__(self, pages: dict[str, dict[str, Any]]) -> None:
-        self.pages = pages
-        self.posted: list[str] = []
-        self.failing: set[str] = set()
-
-    def get_json(self, url: str, _token: str) -> dict[str, Any]:
-        return self.pages[url]
-
-    def post_json(self, url: str, _token: str, _body: dict[str, Any]) -> None:
-        if url in self.failing:
-            raise FabkitError(f"POST {url} failed with HTTP 401.", ["no access"])
-        self.posted.append(url)
+IN_SCOPE = CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]")
 
 
 def takeover_url(item_id: str) -> str:
-    return f"{POWER_BI_API_ROOT}/groups/ws-guid/datasets/{item_id}/Default.TakeOver"
+    return f"{POWER_BI_API_ROOT}/groups/{WORKSPACE_ID}/datasets/{item_id}/Default.TakeOver"
 
 
-def add_model(repo: FabricRepo, folder: str, name: str, logical_id: str) -> None:
-    content = platform_json("SemanticModel", name, logical_id)
-    repo.write(f"src/{folder}.SemanticModel/.platform", content)
-
-
-@pytest.fixture
-def api(fabric_repo: FabricRepo, monkeypatch: pytest.MonkeyPatch) -> FakeApi:
-    """Semantic model items in the workspace, with SemanticModel in scope."""
-    fabric_repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]"))
-    fake = FakeApi({ITEMS_URL: {"value": [{"id": "sm-1", "displayName": "sales"}]}})
-    monkeypatch.setattr(takeover, "get_json", fake.get_json)
-    monkeypatch.setattr(takeover, "post_json", fake.post_json)
-    return fake
-
-
-def run(repo: FabricRepo) -> Any:
+def take_over(repo: FabricRepo, config: str = IN_SCOPE) -> Findings:
+    repo.write("config.yml", config)
     return take_over_semantic_models(
-        FakeCredential(), load_deploy_config(repo.config), "DEV", lambda: "ws-guid"
+        FakeCredential(), load_deploy_config(repo.config), "DEV", lambda: WORKSPACE_ID
     )
 
 
-# A model in the repository and in the workspace is taken over by its workspace item ID.
-def test_deployed_model_is_taken_over(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    findings = run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-1")]
-    assert findings.warnings == []
-
-
-# The model name comes from .platform displayName, not the folder name.
-def test_name_comes_from_platform(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    add_model(fabric_repo, "renamed-folder", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-1")]
+@pytest.fixture
+def models(fabric_repo: FabricRepo, fabric: FakeFabric) -> FakeFabric:
+    """Models sales and finance in the repository, in odd folders. sales and hr are deployed."""
+    fabric_repo.write(
+        "src/folder.SemanticModel/.platform", platform_json("SemanticModel", "sales", "a" * 8)
+    )
+    fabric_repo.write(
+        "src/finance.Report/.platform", platform_json("SemanticModel", "finance", "b" * 8)
+    )
+    fabric.semantic_models = [
+        {"id": "sm-1", "displayName": "sales"},
+        {"id": "sm-2", "displayName": "hr"},
+    ]
+    return fabric
 
 
-# A model not in the workspace yet is skipped without a call.
-def test_undeployed_model_is_skipped(
-    fabric_repo: FabricRepo, api: FakeApi, capsys: pytest.CaptureFixture[str]
+# Models in the repository and the workspace are taken over by item ID; others are left alone.
+def test_deployed_models_are_taken_over(
+    fabric_repo: FabricRepo, models: FakeFabric, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    add_model(fabric_repo, "new", "new", "a1111111-1111-1111-1111-111111111111")
+    findings = take_over(fabric_repo)
 
-    findings = run(fabric_repo)
-
-    assert api.posted == []
     assert findings.warnings == []
-    assert "Semantic model new: not in the workspace yet, skipped." in capsys.readouterr().out
-
-
-# A workspace model that is not in the repository is never taken over.
-def test_workspace_only_model_is_left_alone(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    api.pages[ITEMS_URL]["value"].append({"id": "sm-2", "displayName": "manual"})
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-1")]
-
-
-# A failed takeover is a warning, and the other models are still taken over.
-def test_failed_takeover_warns_and_continues(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    api.pages[ITEMS_URL]["value"].append({"id": "sm-2", "displayName": "stock"})
-    api.failing.add(takeover_url("sm-1"))
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-    add_model(fabric_repo, "stock", "stock", "a2222222-2222-2222-2222-222222222222")
-
-    findings = run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-2")]
-    assert len(findings.warnings) == 1
-    assert "Semantic model sales: takeover failed" in findings.warnings[0]
-    assert "HTTP 401" in findings.warnings[0]
-    assert "no access" in findings.warnings[0]
-
-
-# Deployed models are read across continuation pages.
-def test_workspace_items_across_pages(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    api.pages[ITEMS_URL] = {"value": [], "continuationUri": "next"}
-    api.pages["next"] = {"value": [{"id": "sm-1", "displayName": "sales"}]}
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-1")]
-
-
-# item_types_in_scope without SemanticModel skips the step without calls.
-def test_out_of_scope_skips(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    fabric_repo.write("config.yml", CONFIG)
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    run(fabric_repo)
-
-    assert api.posted == []
+    assert models.calls == [takeover_url("sm-1")]
+    out = capsys.readouterr().out
+    assert "Semantic model finance: not in the workspace yet, skipped." in out
+    assert "Took over 1 of 1 deployed semantic models." in out
 
 
 # Without item_types_in_scope every type is in scope, so takeover runs.
-def test_no_item_types_means_all(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    fabric_repo.write("config.yml", CONFIG.replace("  item_types_in_scope: [Notebook]\n", ""))
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
+def test_no_item_types_means_all(fabric_repo: FabricRepo, models: FakeFabric) -> None:
+    take_over(
+        fabric_repo, IN_SCOPE.replace("  item_types_in_scope: [Notebook, SemanticModel]\n", "")
+    )
 
-    run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-1")]
-
-
-# A repository without semantic models looks up nothing.
-def test_no_models_no_calls(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    def fail() -> str:
-        raise AssertionError("must not look up the workspace")
-
-    take_over_semantic_models(FakeCredential(), load_deploy_config(fabric_repo.config), "DEV", fail)
-
-    assert api.posted == []
+    assert models.calls == [takeover_url("sm-1")]
 
 
-# An unreadable .platform is a warning and the folder is skipped.
-def test_unreadable_platform_warns(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    fabric_repo.write("src/broken.SemanticModel/.platform", "{not json")
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
+# A failed takeover is a warning, not a failure.
+def test_failed_takeover_warns(fabric_repo: FabricRepo, models: FakeFabric) -> None:
+    models.refuse_posts = True
 
-    findings = run(fabric_repo)
+    findings = take_over(fabric_repo)
 
-    assert api.posted == [takeover_url("sm-1")]
-    assert len(findings.warnings) == 1
-    assert "broken.SemanticModel" in findings.warnings[0]
+    reason = f"POST {takeover_url('sm-1')} failed with HTTP 401. no access"
+    assert findings.warnings == [f"Semantic model sales: takeover failed: {reason}"]
 
 
-# Items are found by .platform metadata.type, whatever the folder is called.
-def test_found_by_platform_type(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    content = platform_json("SemanticModel", "sales", "a1111111-1111-1111-1111-111111111111")
-    fabric_repo.write("src/models/sales/.platform", content)
+# Takeover is skipped without API calls when the deploy publishes no semantic models.
+@pytest.mark.parametrize(
+    ("config", "warns"),
+    [
+        pytest.param(CONFIG, False, id="out-of-scope"),
+        pytest.param(IN_SCOPE + "publish:\n  skip: true\n", False, id="publish-skip"),
+        pytest.param(
+            IN_SCOPE + "publish:\n  folder_exclude_regex: ^/x\n", True, id="folder-filter"
+        ),
+        pytest.param(
+            IN_SCOPE + "publish:\n  exclude_regex: ^(sales|finance)$\n", False, id="all-excluded"
+        ),
+    ],
+)
+def test_takeover_skipped(
+    fabric_repo: FabricRepo, models: FakeFabric, config: str, warns: bool
+) -> None:
+    findings = take_over(fabric_repo, config)
 
-    run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-1")]
-
-
-def with_publish(repo: FabricRepo, publish: str) -> None:
-    config = CONFIG.replace("[Notebook]", "[Notebook, SemanticModel]")
-    repo.write("config.yml", f"{config}publish:\n{publish}")
-
-
-# A model matching publish.exclude_regex is not taken over.
-def test_exclude_regex_is_honoured(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    with_publish(fabric_repo, "  exclude_regex: ^sal\n")
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    run(fabric_repo)
-
-    assert api.posted == []
+    assert models.requested == []
+    assert bool(findings.warnings) == warns
 
 
-# With publish.items_to_include, only the listed models are taken over.
-def test_items_to_include_is_honoured(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    api.pages[ITEMS_URL]["value"].append({"id": "sm-2", "displayName": "stock"})
-    with_publish(fabric_repo, "  items_to_include: [stock.SemanticModel]\n")
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-    add_model(fabric_repo, "stock", "stock", "a2222222-2222-2222-2222-222222222222")
+# Only the models fabric-cicd publishes are taken over: exclude_regex and items_to_include apply.
+@pytest.mark.parametrize(
+    "publish",
+    [
+        "  exclude_regex: ^fin\n",
+        "  items_to_include: [sales.SemanticModel]\n",
+        "  items_to_include: [SALES.semanticmodel]\n",
+    ],
+)
+def test_publish_filters_apply(fabric_repo: FabricRepo, models: FakeFabric, publish: str) -> None:
+    models.semantic_models.append({"id": "sm-3", "displayName": "finance"})
 
-    run(fabric_repo)
+    take_over(fabric_repo, IN_SCOPE + "publish:\n" + publish)
 
-    assert api.posted == [takeover_url("sm-2")]
-
-
-# publish.items_to_include matches in any casing, as fabric-cicd does.
-def test_items_to_include_ignores_case(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    api.pages[ITEMS_URL]["value"].append({"id": "sm-2", "displayName": "stock"})
-    with_publish(fabric_repo, "  items_to_include: [STOCK.semanticmodel]\n")
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-    add_model(fabric_repo, "stock", "stock", "a2222222-2222-2222-2222-222222222222")
-
-    run(fabric_repo)
-
-    assert api.posted == [takeover_url("sm-2")]
-
-
-# publish.skip for the environment skips the takeover.
-def test_publish_skip_is_honoured(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    with_publish(fabric_repo, "  skip:\n    DEV: true\n")
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    run(fabric_repo)
-
-    assert api.posted == []
-
-
-# A folder filter in publish skips the takeover with a warning.
-def test_folder_filter_skips_with_warning(fabric_repo: FabricRepo, api: FakeApi) -> None:
-    with_publish(fabric_repo, "  folder_exclude_regex: ^/legacy\n")
-    add_model(fabric_repo, "sales", "sales", "a1111111-1111-1111-1111-111111111111")
-
-    findings = run(fabric_repo)
-
-    assert api.posted == []
-    assert findings.warnings == [
-        "Semantic model takeover skipped: publish.folder_exclude_regex is not supported."
-    ]
+    assert models.calls == [takeover_url("sm-1")]

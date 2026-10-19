@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 
 
@@ -25,3 +26,9 @@ class Findings:
         """Add another check's findings to these."""
         self.errors.extend(other.errors)
         self.warnings.extend(other.warnings)
+
+
+def print_warnings(warnings: list[str]) -> None:
+    """Print warnings to stderr."""
+    for warning in warnings:
+        print(f"warning: {warning}", file=sys.stderr)

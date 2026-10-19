@@ -8,20 +8,18 @@ import sys
 from importlib.metadata import version
 from pathlib import Path
 
-from fabkit.config import check_config, load_deploy_config
+from fabkit.config import load_deploy_config
 from fabkit.connections import DEFAULT_CONNECTION_VARIABLES
-from fabkit.deploy import run_deploy
-from fabkit.errors import FabkitError, Findings
-from fabkit.parameters import check_parameters
+from fabkit.deploy import run_checks, run_deploy
+from fabkit.errors import FabkitError, Findings, print_warnings
 from fabkit.platform_files import check_logical_ids
 from fabkit.uploads import check_target, parse_upload, run_upload
-from fabkit.value_sets import check_value_set_environments, check_value_sets
+from fabkit.value_sets import check_value_sets
 
 
 def report(findings: Findings, what: str) -> int:
     """Print findings and return the exit code."""
-    for warning in findings.warnings:
-        print(f"warning: {warning}", file=sys.stderr)
+    print_warnings(findings.warnings)
     for error in findings.errors:
         print(f"error: {error}", file=sys.stderr)
     if findings.errors:
@@ -43,13 +41,7 @@ def check_regex(pattern: str) -> str:
 def run_validate(args: argparse.Namespace) -> int:
     """File checks for every environment. Never logs in."""
     config = load_deploy_config(Path(args.config))
-    findings = check_config(config)
-    if not findings.errors:
-        findings.extend(check_parameters(config, unmatched_find_value=args.unmatched_find_value))
-    findings.extend(check_logical_ids(Path.cwd()))
-    findings.extend(check_value_sets(Path.cwd()))
-    findings.extend(check_value_set_environments(config))
-    return report(findings, "Validation")
+    return report(run_checks(config, unmatched_find_value=args.unmatched_find_value), "Validation")
 
 
 def build_parser() -> argparse.ArgumentParser:

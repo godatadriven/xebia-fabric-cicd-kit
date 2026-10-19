@@ -1,204 +1,162 @@
-import shutil
-
 import pytest
 from helpers import CONFIG, PLATFORM, FabricRepo, assert_reported
 
 from fabkit.config import check_config, load_deploy_config
 from fabkit.errors import FabkitError
 
-WORKSPACE_NAMES = "  workspace:\n    DEV: sales-dev\n    PROD: sales-prod\n"
+WORKSPACES = "  workspace:\n    DEV: sales-dev\n    PROD: sales-prod\n"
+EMPTY_SRC = CONFIG.replace("repository_directory: src", "repository_directory: empty")
+PIPELINE = PLATFORM.replace("1111", "2222").replace("Notebook", "DataPipeline")
 
 
-def config_errors(repo: FabricRepo) -> list[str]:
+def config_errors(repo: FabricRepo, config: str, files: dict[str, str] | None = None) -> list[str]:
+    repo.write("config.yml", config)
+    for path, text in (files or {}).items():
+        repo.write(path, text)
     return check_config(load_deploy_config(repo.config)).errors
 
 
-# Environments are the keys of the workspace mapping.
-def test_environments_from_workspace_mapping(fabric_repo: FabricRepo) -> None:
-    assert load_deploy_config(fabric_repo.config).environments == ["DEV", "PROD"]
-
-
-# A workspace_id mapping names the environments too.
-def test_environments_from_workspace_id_mapping(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write(
-        "config.yml",
-        CONFIG.replace(
-            WORKSPACE_NAMES,
-            "  workspace_id:\n"
-            "    DEV: 11111111-1111-1111-1111-111111111111\n"
-            "    PROD: 22222222-2222-2222-2222-222222222222\n",
+# Each problem in config.yml fails, with a message naming it.
+@pytest.mark.parametrize(
+    ("config", "files", "fragments"),
+    [
+        pytest.param(
+            CONFIG.replace(WORKSPACES, "  workspace: sales\n"),
+            {},
+            ("map each environment",),
+            id="one-workspace",
         ),
-    )
-
-    assert load_deploy_config(fabric_repo.config).environments == ["DEV", "PROD"]
-
-
-# Paths resolve relative to the config file, like fabric-cicd does.
-def test_paths_resolve_from_config_folder(fabric_repo: FabricRepo) -> None:
-    config = load_deploy_config(fabric_repo.config)
-
-    assert config.repository_directory("DEV") == (fabric_repo.root / "src").resolve()
-    assert config.parameter_file("DEV") == (fabric_repo.root / "src/parameter.yml").resolve()
-
-
-# A valid config passes.
-def test_valid_config_passes(fabric_repo: FabricRepo) -> None:
-    assert config_errors(fabric_repo) == []
-
-
-# A config file that is not a mapping fails.
-def test_non_mapping_config_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", "- a\n- b\n")
-
-    with pytest.raises(FabkitError, match="mapping"):
-        load_deploy_config(fabric_repo.config)
-
-
-# A workspace given as one string fails: fabkit needs one workspace per environment.
-def test_workspace_string_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG.replace(WORKSPACE_NAMES, "  workspace: sales\n"))
-
-    assert_reported(config_errors(fabric_repo), "map each environment")
-
-
-# A missing unpublish.skip fails: orphan removal must be chosen explicitly.
-def test_missing_unpublish_skip_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG.replace("unpublish:\n  skip: false\n", ""))
-
-    assert_reported(config_errors(fabric_repo), "unpublish.skip")
-
-
-# unpublish.skip per environment must name every environment.
-def test_unpublish_skip_missing_environment_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG.replace("  skip: false\n", "  skip:\n    DEV: false\n"))
-
-    assert_reported(config_errors(fabric_repo), "unpublish.skip", "PROD")
-
-
-# A parameter.yml that config.yml does not reference fails: fabric-cicd ignores it.
-def test_unreferenced_parameter_file_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG.replace("  parameter: src/parameter.yml\n", ""))
-
-    assert_reported(config_errors(fabric_repo), "parameter.yml", "ignores")
-
-
-# fabric-cicd's own validation runs: a missing repository directory fails.
-def test_fabric_cicd_validation_runs(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write(
-        "config.yml", CONFIG.replace("repository_directory: src", "repository_directory: nope")
-    )
-
-    assert_reported(config_errors(fabric_repo), "fabric-cicd rejected")
-
-
-# A config.yml with invalid YAML is a FabkitError, not a traceback.
-def test_invalid_yaml_config_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", "core: [\n")
-
-    with pytest.raises(FabkitError, match="invalid YAML"):
-        load_deploy_config(fabric_repo.config)
+        pytest.param(
+            CONFIG.replace("unpublish:\n  skip: false\n", ""), {}, ("unpublish.skip",), id="no-skip"
+        ),
+        pytest.param(
+            CONFIG.replace("  skip: false\n", "  skip:\n    DEV: false\n"),
+            {},
+            ("unpublish.skip", "PROD"),
+            id="skip-per-environment",
+        ),
+        pytest.param(
+            CONFIG.replace("  parameter: src/parameter.yml\n", ""),
+            {},
+            ("parameter.yml", "ignores"),
+            id="unreferenced-parameter-file",
+        ),
+        pytest.param(
+            CONFIG.replace("repository_directory: src", "repository_directory: nope"),
+            {},
+            ("fabric-cicd rejected",),
+            id="fabric-cicd",
+        ),
+        pytest.param(
+            CONFIG.replace("[Notebook]", "{DEV: [Notebook]}"),
+            {},
+            ("core.item_types_in_scope", "PROD"),
+            id="item-types",
+        ),
+        pytest.param(
+            CONFIG + "  exclude_regex:\n    PROD: ^keep_\n",
+            {},
+            ("unpublish.exclude_regex", "DEV"),
+            id="exclude-regex",
+        ),
+        pytest.param(
+            CONFIG + "features:\n  DEV: [enable_hard_delete]\n",
+            {},
+            ("features", "PROD"),
+            id="features",
+        ),
+        pytest.param(
+            CONFIG
+            + "constants:\n  DEFAULT_API_ROOT_URL:\n    DEV: https://api.fabric.microsoft.com\n",
+            {},
+            ("constants.DEFAULT_API_ROOT_URL", "PROD"),
+            id="constants",
+        ),
+        pytest.param(
+            CONFIG,
+            {"src/archive/nb.Notebook/.platform": PLATFORM.replace("1111", "2222")},
+            ("Notebook 'nb'", "archive/nb.Notebook"),
+            id="duplicate-item",
+        ),
+        pytest.param(
+            EMPTY_SRC, {"empty/.keep": ""}, ("DEV", "no items", "Notebook"), id="empty-repository"
+        ),
+        pytest.param(
+            EMPTY_SRC,
+            {"empty/r.Report/.platform": PLATFORM.replace("Notebook", "Report")},
+            ("no items",),
+            id="items-out-of-scope",
+        ),
+    ],
+)
+def test_config_problem_fails(
+    fabric_repo: FabricRepo, config: str, files: dict[str, str], fragments: tuple[str, ...]
+) -> None:
+    assert_reported(config_errors(fabric_repo, config, files), *fragments)
 
 
-def remove_notebook(repo: FabricRepo) -> None:
-    shutil.rmtree(repo.root / "src/nb.Notebook")
+# Valid configs pass.
+@pytest.mark.parametrize(
+    ("config", "files"),
+    [
+        pytest.param(CONFIG, {}, id="valid"),
+        pytest.param(
+            CONFIG.replace(
+                WORKSPACES,
+                "  workspace_id:\n"
+                "    DEV: 11111111-1111-1111-1111-111111111111\n"
+                "    PROD: 22222222-2222-2222-2222-222222222222\n",
+            ),
+            {},
+            id="workspace-ids",
+        ),
+        pytest.param(
+            EMPTY_SRC.replace("skip: false", "skip: true"), {"empty/.keep": ""}, id="empty-skipped"
+        ),
+        pytest.param(
+            CONFIG.replace("[Notebook]", "[Notebook, DataPipeline]"),
+            {"src/nb.DataPipeline/.platform": PIPELINE},
+            id="same-name-other-type",
+        ),
+        pytest.param(
+            CONFIG
+            + "  exclude_regex:\n    DEV: ^keep_\n    PROD: ^keep_\n"
+            + "publish:\n  exclude_regex:\n    DEV: ^tmp_\n    PROD: ^tmp_\n",
+            {},
+            id="complete-mappings",
+        ),
+    ],
+)
+def test_valid_config_passes(fabric_repo: FabricRepo, config: str, files: dict[str, str]) -> None:
+    assert config_errors(fabric_repo, config, files) == []
 
 
-# A repository with no items in scope fails while unpublish removes orphans.
-def test_empty_repository_with_unpublish_fails(fabric_repo: FabricRepo) -> None:
-    remove_notebook(fabric_repo)
-
-    assert_reported(config_errors(fabric_repo), "DEV", "no items", "Notebook")
-
-
-# A repository with no items passes when unpublish is skipped.
-def test_empty_repository_with_unpublish_skipped_passes(fabric_repo: FabricRepo) -> None:
-    remove_notebook(fabric_repo)
-    fabric_repo.write("config.yml", CONFIG.replace("skip: false", "skip: true"))
-
-    assert config_errors(fabric_repo) == []
-
-
-# Items of types outside item_types_in_scope do not count.
-def test_only_out_of_scope_items_fail(fabric_repo: FabricRepo) -> None:
-    remove_notebook(fabric_repo)
-    fabric_repo.write("src/sales.Report/.platform", PLATFORM.replace("Notebook", "Report"))
-
-    assert_reported(config_errors(fabric_repo), "no items")
-
-
-# Only environments that remove orphans are reported.
+# An empty repository is reported only for the environments that remove orphans.
 def test_empty_repository_reports_unpublishing_environments(fabric_repo: FabricRepo) -> None:
-    remove_notebook(fabric_repo)
-    fabric_repo.write(
-        "config.yml",
-        CONFIG.replace("skip: false", "skip:\n    DEV: true\n    PROD: false"),
-    )
+    config = EMPTY_SRC.replace("skip: false", "skip:\n    DEV: true\n    PROD: false")
 
-    errors = config_errors(fabric_repo)
+    errors = config_errors(fabric_repo, config, {"empty/.keep": ""})
 
     assert_reported(errors, "PROD", "no items")
     assert not any("DEV" in e for e in errors), errors
 
 
-# Two items with the same type and name fail: fabric-cicd deploys only one of them.
-def test_duplicate_item_name_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("src/archive/nb.Notebook/.platform", PLATFORM.replace("1111", "2222"))
+# Environments are the workspace keys; paths resolve relative to the config file.
+def test_environments_and_paths(fabric_repo: FabricRepo) -> None:
+    config = load_deploy_config(fabric_repo.config)
 
-    assert_reported(config_errors(fabric_repo), "Notebook 'nb'", "archive/nb.Notebook")
-
-
-# The same name on items of different types passes.
-def test_same_name_different_type_passes(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG.replace("[Notebook]", "[Notebook, DataPipeline]"))
-    platform = PLATFORM.replace("1111", "2222").replace("Notebook", "DataPipeline")
-    fabric_repo.write("src/nb.DataPipeline/.platform", platform)
-
-    assert config_errors(fabric_repo) == []
+    assert config.environments == ["DEV", "PROD"]
+    assert config.repository_directory("DEV") == (fabric_repo.root / "src").resolve()
+    assert config.parameter_file("DEV") == (fabric_repo.root / "src/parameter.yml").resolve()
 
 
-# A per-environment item_types_in_scope that leaves out an environment fails: it deploys every type.
-def test_item_types_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write(
-        "config.yml",
-        CONFIG.replace(
-            "item_types_in_scope: [Notebook]", "item_types_in_scope:\n    DEV: [Notebook]"
-        ),
-    )
+# An unreadable config.yml is a FabkitError, not a traceback.
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [(b"core: [\n", "invalid YAML"), (b"\x93core\x94: x\n", "invalid YAML"), (b"- a\n", "mapping")],
+)
+def test_unreadable_config_fails(fabric_repo: FabricRepo, content: bytes, message: str) -> None:
+    fabric_repo.config.write_bytes(content)
 
-    assert_reported(config_errors(fabric_repo), "core.item_types_in_scope", "PROD")
-
-
-# A per-environment unpublish.exclude_regex that leaves out an environment fails.
-def test_unpublish_exclude_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG + "  exclude_regex:\n    PROD: ^keep_\n")
-
-    assert_reported(config_errors(fabric_repo), "unpublish.exclude_regex", "DEV")
-
-
-# Per-environment features that leave out an environment fail.
-def test_features_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write("config.yml", CONFIG + "features:\n  DEV: [enable_hard_delete]\n")
-
-    assert_reported(config_errors(fabric_repo), "features", "PROD")
-
-
-# A per-environment constant that leaves out an environment fails.
-def test_constant_mapping_missing_environment_fails(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write(
-        "config.yml",
-        CONFIG + "constants:\n  DEFAULT_API_ROOT_URL:\n    DEV: https://api.fabric.microsoft.com\n",
-    )
-
-    assert_reported(config_errors(fabric_repo), "constants.DEFAULT_API_ROOT_URL", "PROD")
-
-
-# Mappings that name every environment pass.
-def test_complete_environment_mappings_pass(fabric_repo: FabricRepo) -> None:
-    fabric_repo.write(
-        "config.yml",
-        CONFIG
-        + "  exclude_regex:\n    DEV: ^keep_\n    PROD: ^keep_\n"
-        + "publish:\n  exclude_regex:\n    DEV: ^tmp_\n    PROD: ^tmp_\n",
-    )
-
-    assert config_errors(fabric_repo) == []
+    with pytest.raises(FabkitError, match=message):
+        load_deploy_config(fabric_repo.config)

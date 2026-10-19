@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,7 +10,7 @@ from typing import Any
 import yaml
 
 from fabkit.errors import FabkitError, Findings
-from fabkit.platform_files import item_folders_by_name, item_types_present
+from fabkit.platform_files import read_items
 
 # Settings fabric-cicd reads per environment, besides features and constants
 ENVIRONMENT_MAPPED_SETTINGS = {
@@ -85,6 +86,11 @@ class DeployConfig:
         value = self.value("core", "item_types_in_scope", environment)
         return list(value) if value else None
 
+    def in_scope(self, environment: str, item_type: str) -> bool:
+        """Whether the environment deploys items of this type."""
+        item_types = self.item_types(environment)
+        return item_types is None or item_type in item_types
+
 
 def require_environment(config: DeployConfig, environment: str) -> None:
     """Fail when config.yml has no workspace for the environment."""
@@ -115,25 +121,27 @@ def check_config(config: DeployConfig) -> Findings:
     except FabkitError as error:
         return Findings(errors=[error.summary])
 
-    findings = Findings()
-    findings.errors.extend(_fabric_cicd_errors(config, environments))
-    findings.errors.extend(_unpublish_errors(config))
-    findings.errors.extend(_missing_environment_errors(config, environments))
-    findings.errors.extend(_empty_repository_errors(config, environments))
-    findings.errors.extend(_duplicate_item_errors(config, environments))
-    findings.errors.extend(_unreferenced_parameter_errors(config, environments))
-    return findings
+    directories = {}
+    for environment in environments:
+        try:
+            directories[environment] = config.repository_directory(environment)
+        except FabkitError:
+            continue  # reported by fabric-cicd's own validation
+
+    errors = [
+        *_fabric_cicd_errors(config, environments),
+        *_unpublish_errors(config),
+        *_missing_environment_errors(config, environments),
+        *_empty_repository_errors(config, directories),
+        *_duplicate_item_errors(config, directories),
+        *_unreferenced_parameter_errors(config, directories),
+    ]
+    return Findings(errors=list(dict.fromkeys(errors)))
 
 
 def _fabric_cicd_errors(config: DeployConfig, environments: list[str]) -> list[str]:
     """fabric-cicd's own config validation, once per environment."""
-    try:
-        from fabric_cicd._common._config_utils import load_config_file
-    except ImportError as error:
-        raise FabkitError(
-            "fabric-cicd's config validator could not be imported; its private API moved.",
-            [str(error)],
-        ) from error
+    from fabric_cicd._common._config_utils import load_config_file
 
     errors = []
     for environment in environments:
@@ -156,21 +164,17 @@ def _unpublish_errors(config: DeployConfig) -> list[str]:
 
 def _missing_environment_errors(config: DeployConfig, environments: list[str]) -> list[str]:
     """Per-environment settings that leave out an environment. fabric-cicd skips them there."""
-    mappings: list[tuple[str, Any]] = [
+    mappings = [
         (f"{section}.{key}", config.section(section).get(key))
         for section, keys in ENVIRONMENT_MAPPED_SETTINGS.items()
         for key in keys
     ]
     mappings.append(("features", config.raw.get("features")))
-    mappings.extend(
-        (f"constants.{key}", value) for key, value in config.section("constants").items()
-    )
+    mappings += [(f"constants.{key}", value) for key, value in config.section("constants").items()]
 
     errors = []
     for name, value in mappings:
-        if not isinstance(value, dict):
-            continue
-        missing = [environment for environment in environments if environment not in value]
+        missing = [env for env in environments if isinstance(value, dict) and env not in value]
         if missing:
             errors.append(
                 f"{config.path.name}: {name} is not set for {', '.join(missing)}. fabric-cicd "
@@ -179,25 +183,16 @@ def _missing_environment_errors(config: DeployConfig, environments: list[str]) -
     return errors
 
 
-def _empty_repository_errors(config: DeployConfig, environments: list[str]) -> list[str]:
+def _empty_repository_errors(config: DeployConfig, directories: dict[str, Path]) -> list[str]:
     """With unpublish on, a repository without items in scope empties the workspace."""
     errors = []
-    for environment in environments:
-        if config.value("unpublish", "skip", environment) is not False:
-            continue
-        try:
-            directory = config.repository_directory(environment)
-        except FabkitError:
-            continue
+    for environment, directory in directories.items():
         # A missing folder is reported by fabric-cicd's own validation
-        if not directory.is_dir():
+        if config.value("unpublish", "skip", environment) is not False or not directory.is_dir():
+            continue
+        if any(config.in_scope(environment, item.type) for item in read_items(directory)):
             continue
         scope = config.item_types(environment)
-        present = item_types_present(directory)
-        if scope is not None:
-            present &= set(scope)
-        if present:
-            continue
         removed = f"{', '.join(scope)} item" if scope else "item"
         errors.append(
             f"{config.path.name}: {environment} deploys no items from {directory.name}/, and "
@@ -207,39 +202,29 @@ def _empty_repository_errors(config: DeployConfig, environments: list[str]) -> l
     return errors
 
 
-def _duplicate_item_errors(config: DeployConfig, environments: list[str]) -> list[str]:
+def _duplicate_item_errors(config: DeployConfig, directories: dict[str, Path]) -> list[str]:
     """Items in scope sharing a type and name. fabric-cicd deploys only one of them."""
     errors = []
-    for environment in environments:
-        try:
-            directory = config.repository_directory(environment)
-        except FabkitError:
-            continue
-        scope = config.item_types(environment)
-        for (item_type, name), folders in item_folders_by_name(directory).items():
-            if len(folders) < 2 or (scope is not None and item_type not in scope):
-                continue
-            listed = ", ".join(str(folder.relative_to(directory)) for folder in folders)
-            errors.append(
-                f"{item_type} {name!r} is in {listed}. fabric-cicd deploys only one of them; "
-                "rename one."
-            )
-    return list(dict.fromkeys(errors))
-
-
-def _unreferenced_parameter_errors(config: DeployConfig, environments: list[str]) -> list[str]:
-    """A parameter.yml that config.yml does not reference is ignored by fabric-cicd."""
-    errors = []
-    for environment in environments:
-        if config.parameter_file(environment) is not None:
-            continue
-        try:
-            candidate = config.repository_directory(environment) / "parameter.yml"
-        except FabkitError:
-            continue
-        if candidate.is_file():
-            errors.append(
-                f"{candidate} exists, but {config.path.name} has no core.parameter for "
-                f"{environment}. fabric-cicd ignores the file."
-            )
+    for environment, directory in directories.items():
+        folders: dict[tuple[str, str], list[Path]] = defaultdict(list)
+        for item in read_items(directory):
+            if config.in_scope(environment, item.type):
+                folders[(item.type, item.name)].append(item.folder)
+        for (item_type, name), paths in folders.items():
+            if len(paths) > 1:
+                listed = ", ".join(str(path.relative_to(directory)) for path in paths)
+                errors.append(
+                    f"{item_type} {name!r} is in {listed}. fabric-cicd deploys only one of "
+                    "them; rename one."
+                )
     return errors
+
+
+def _unreferenced_parameter_errors(config: DeployConfig, directories: dict[str, Path]) -> list[str]:
+    """A parameter.yml that config.yml does not reference is ignored by fabric-cicd."""
+    return [
+        f"{directory / 'parameter.yml'} exists, but {config.path.name} has no core.parameter "
+        f"for {environment}. fabric-cicd ignores the file."
+        for environment, directory in directories.items()
+        if config.parameter_file(environment) is None and (directory / "parameter.yml").is_file()
+    ]
