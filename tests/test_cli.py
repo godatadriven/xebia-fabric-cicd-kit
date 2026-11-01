@@ -119,3 +119,12 @@ def test_invalid_connection_variables_regex_is_usage_error(
 
     assert exit_info.value.code == 2
     assert "--connection-variables" in capsys.readouterr().err
+
+
+# Every command starts with a header naming the fabkit version and the command.
+def test_header_comes_first(fabric_repo: FabricRepo, capsys: pytest.CaptureFixture[str]) -> None:
+    main(["validate"])
+
+    assert capsys.readouterr().out.startswith(
+        f"=== fabkit {version('xebia-fabkit')} · validate ===\n"
+    )

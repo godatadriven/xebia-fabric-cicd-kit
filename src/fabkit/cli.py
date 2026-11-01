@@ -136,9 +136,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def print_header(command: str) -> None:
+    """Print the fabkit version and the command, before any output of the command."""
+    # Flushed so it comes first when stdout and stderr go to the same pipe
+    print(f"=== fabkit {version('xebia-fabkit')} · {command} ===\n", flush=True)
+
+
 def run(parser: argparse.ArgumentParser, argv: list[str] | None) -> int:
     """Parse argv and run the chosen subcommand."""
     args = parser.parse_args(argv)
+    print_header(args.command)
     try:
         return int(args.func(args))
     except FabkitError as error:
