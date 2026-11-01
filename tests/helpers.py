@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +12,7 @@ from typing import Any
 import yaml
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 
-from fabkit.errors import FabkitError
+from fabkit.errors import FabkitError, Issue
 
 CONFIG = """\
 core:
@@ -73,10 +73,11 @@ def find_replace(find: str | None, **values: Any) -> str:
     return yaml.safe_dump({"find_replace": [entry]}, sort_keys=False)
 
 
-def assert_reported(messages: list[str], *fragments: str) -> None:
-    """At least one message contains every fragment."""
-    assert any(all(f in m for f in fragments) for m in messages), (
-        f"no message containing {fragments} in {messages}"
+def assert_reported(issues: Sequence[Issue | str], *fragments: str) -> None:
+    """At least one issue, with its file, contains every fragment."""
+    texts = [str(issue) for issue in issues]
+    assert any(all(f in text for f in fragments) for text in texts), (
+        f"no message containing {fragments} in {texts}"
     )
 
 

@@ -7,7 +7,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from fabkit.errors import Findings
+from fabkit.errors import Findings, Issue, display_path
 
 # The logicalId Fabric's export API writes when an item has none
 PLACEHOLDER_LOGICAL_ID = "00000000-0000-0000-0000-000000000000"
@@ -49,7 +49,10 @@ def read_items(root: Path) -> list[Item]:
 
 
 def check_logical_ids(root: Path) -> Findings:
-    """Every .platform file has a string config.logicalId, and no two share one."""
+    """Every .platform file has a string config.logicalId, and no two share one.
+
+    A shared logicalId is reported on each file that has it.
+    """
     errors = []
     files_by_id: dict[str, list[Path]] = defaultdict(list)
     for path in platform_files(root):
@@ -57,20 +60,20 @@ def check_logical_ids(root: Path) -> Findings:
         config = content.get("config") if isinstance(content, dict) else None
         logical_id = config.get("logicalId") if isinstance(config, dict) else None
         if problem:
-            errors.append(f"{path}: invalid JSON: {problem}")
+            errors.append(Issue(path, f"invalid JSON: {problem}"))
         elif not isinstance(logical_id, str):
-            errors.append(f"{path}: config.logicalId is missing or not a string.")
+            errors.append(Issue(path, "config.logicalId is missing or not a string."))
         else:
             files_by_id[logical_id].append(path)
 
     for logical_id, paths in sorted(files_by_id.items()):
-        if len(paths) < 2:
-            continue
-        message = f"logicalId {logical_id} is used by {', '.join(str(p) for p in paths)}."
-        if logical_id == PLACEHOLDER_LOGICAL_ID:
-            message += (
-                " This is the placeholder Fabric's export writes. Give each item a unique "
-                "logicalId; other items cannot reference it otherwise."
-            )
-        errors.append(message)
+        for path in paths if len(paths) > 1 else []:
+            others = ", ".join(display_path(other) for other in paths if other != path)
+            message = f"logicalId {logical_id} is also used by {others}."
+            if logical_id == PLACEHOLDER_LOGICAL_ID:
+                message += (
+                    " This is the placeholder Fabric's export writes. Give each item a unique "
+                    "logicalId; other items cannot reference it otherwise."
+                )
+            errors.append(Issue(path, message))
     return Findings(errors=errors)

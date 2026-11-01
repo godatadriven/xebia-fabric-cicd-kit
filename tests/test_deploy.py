@@ -73,7 +73,7 @@ def test_deploy_checks_connections_deploys_and_uploads(
                     "Notebook", "o", "1" * 8 + "-1111-1111-1111-111111111111"
                 )
             },
-            "is used by",
+            "also used by",
             id="duplicate-logical-id",
         ),
         pytest.param(

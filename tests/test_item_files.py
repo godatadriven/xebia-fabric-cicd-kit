@@ -5,6 +5,7 @@ import pytest
 from helpers import CONFIG, FabricRepo, assert_reported
 
 from fabkit.config import load_deploy_config
+from fabkit.errors import Issue
 from fabkit.platform_files import check_logical_ids
 from fabkit.value_sets import (
     KNOWN_VALUE_SET_SCHEMA,
@@ -68,6 +69,20 @@ def test_logical_id_problem_fails(
     assert_reported(check_logical_ids(tmp_path).errors, *fragments)
 
 
+# A shared logicalId is reported on each file that has it.
+def test_shared_logical_id_reported_per_file(tmp_path: Path) -> None:
+    write(
+        tmp_path, {"a.Notebook/.platform": logical_id("1"), "b.Notebook/.platform": logical_id("1")}
+    )
+
+    errors = check_logical_ids(tmp_path).errors
+
+    assert [error.file for error in errors] == [
+        tmp_path / "a.Notebook/.platform",
+        tmp_path / "b.Notebook/.platform",
+    ]
+
+
 VALUE_SET = "vars.VariableLibrary/valueSets/PROD.json"
 
 
@@ -109,7 +124,7 @@ def test_value_set_problem_fails(
     assert_reported(check_value_sets(tmp_path).errors, *fragments)
 
 
-def library_errors(repo: FabricRepo, item_types: str, settings: object | None) -> list[str]:
+def library_errors(repo: FabricRepo, item_types: str, settings: object | None) -> list[Issue]:
     repo.write("config.yml", CONFIG.replace("[Notebook]", item_types))
     write(repo.root / "src", {"vars.VariableLibrary/variables.json": {"variables": []}})
     if settings is not None:

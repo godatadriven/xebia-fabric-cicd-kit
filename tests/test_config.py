@@ -2,14 +2,16 @@ import pytest
 from helpers import CONFIG, PLATFORM, FabricRepo, assert_reported
 
 from fabkit.config import check_config, load_deploy_config
-from fabkit.errors import FabkitError
+from fabkit.errors import FabkitError, Issue
 
 WORKSPACES = "  workspace:\n    DEV: sales-dev\n    PROD: sales-prod\n"
 EMPTY_SRC = CONFIG.replace("repository_directory: src", "repository_directory: empty")
 PIPELINE = PLATFORM.replace("1111", "2222").replace("Notebook", "DataPipeline")
 
 
-def config_errors(repo: FabricRepo, config: str, files: dict[str, str] | None = None) -> list[str]:
+def config_errors(
+    repo: FabricRepo, config: str, files: dict[str, str] | None = None
+) -> list[Issue]:
     repo.write("config.yml", config)
     for path, text in (files or {}).items():
         repo.write(path, text)
@@ -44,7 +46,7 @@ def config_errors(repo: FabricRepo, config: str, files: dict[str, str] | None = 
         pytest.param(
             CONFIG.replace("repository_directory: src", "repository_directory: nope"),
             {},
-            ("fabric-cicd rejected",),
+            ("fabric-cicd (DEV)", "repository_directory"),
             id="fabric-cicd",
         ),
         pytest.param(
@@ -138,7 +140,7 @@ def test_empty_repository_reports_unpublishing_environments(fabric_repo: FabricR
     errors = config_errors(fabric_repo, config, {"empty/.keep": ""})
 
     assert_reported(errors, "PROD", "no items")
-    assert not any("DEV" in e for e in errors), errors
+    assert not any("DEV" in str(e) for e in errors), errors
 
 
 # Environments are the workspace keys; paths resolve relative to the config file.

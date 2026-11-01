@@ -22,6 +22,17 @@ FATAL_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^Failed to unpublish ", re.IGNORECASE),
 )
 
+# fabric-cicd warnings left out of the check report.
+# _ALL_ is valid; constants overrides are expected; fabkit reports missing environments itself.
+IGNORED_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"Found the reserved environment key", re.IGNORECASE),
+    re.compile(r"^Override constant ", re.IGNORECASE),
+    re.compile(r"^Environment '.*' not found in ", re.IGNORECASE),
+)
+
+# The fabric-cicd loggers with a console handler
+CONSOLE_LOGGERS = ("fabric_cicd", "console_only")
+
 
 class FatalLogCollector(logging.Handler):
     """Collects fabric-cicd ERROR records and the WARNING records in FATAL_WARNING_PATTERNS."""
@@ -29,6 +40,7 @@ class FatalLogCollector(logging.Handler):
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
         self.messages: list[str] = []
+        self.warnings: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         message = record.getMessage()
@@ -36,6 +48,8 @@ class FatalLogCollector(logging.Handler):
             self.messages.append(message)
         elif any(pattern.search(message) for pattern in FATAL_WARNING_PATTERNS):
             self.messages.append(f"{message} [warning treated as failure]")
+        elif not any(pattern.search(message) for pattern in IGNORED_WARNING_PATTERNS):
+            self.warnings.append(message)
 
 
 @contextmanager
@@ -48,3 +62,27 @@ def collect_fatal_logs() -> Iterator[FatalLogCollector]:
         yield collector
     finally:
         logger.removeHandler(collector)
+
+
+def _is_console(handler: logging.Handler) -> bool:
+    return isinstance(handler, logging.StreamHandler) and not isinstance(
+        handler, logging.FileHandler
+    )
+
+
+@contextmanager
+def collect_check_logs() -> Iterator[FatalLogCollector]:
+    """Collect fabric-cicd records without printing them, for the duration of the block.
+
+    Other warnings go to the collector's warnings.
+    """
+    loggers = [logging.getLogger(name) for name in CONSOLE_LOGGERS]
+    saved = [(logger, logger.handlers[:]) for logger in loggers]
+    for logger in loggers:
+        logger.handlers = [h for h in logger.handlers if not _is_console(h)]
+    try:
+        with collect_fatal_logs() as collector:
+            yield collector
+    finally:
+        for logger, handlers in saved:
+            logger.handlers = handlers

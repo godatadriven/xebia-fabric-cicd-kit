@@ -6,7 +6,7 @@ import yaml
 from helpers import CONFIG, FabricRepo, assert_reported, find_replace, platform_json
 
 from fabkit.config import load_deploy_config
-from fabkit.errors import FabkitError, Findings
+from fabkit.errors import Findings
 from fabkit.parameters import check_parameters
 
 GUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -119,7 +119,9 @@ def extend(template: str) -> dict[str, str]:
             id="logged-by-fabric-cicd",
         ),
         pytest.param(
-            find_replace(None, DEV="a", PROD="b"), ("fabric-cicd rejected",), id="rejected"
+            find_replace(None, DEV="a", PROD="b"),
+            ("fabric-cicd (DEV) rejected the file",),
+            id="rejected",
         ),
         pytest.param(key_value_replace(DEV="dev"), ("missing", "PROD"), id="key-value-replace"),
         pytest.param(models("salse"), ("'salse'", "not in the repository"), id="unknown-model"),
@@ -206,7 +208,7 @@ def test_placeholder_value(
     if fails:
         assert_reported(findings.errors, "PLACEHOLDER", f"would be deployed to {target}")
     else:
-        assert not any("PLACEHOLDER" in e for e in findings.errors), findings.errors
+        assert not any("PLACEHOLDER" in str(e) for e in findings.errors), findings.errors
     if target is None:
         assert_reported(findings.warnings, "PLACEHOLDER", "PROD")
 
@@ -242,7 +244,7 @@ def test_checked_per_repository_directory(repo: FabricRepo) -> None:
 
     assert_reported(errors, "matches nothing", "PROD")
     assert_reported(errors, "'sales'", "src_prod/")
-    assert not any("matches nothing" in e and "DEV" in e for e in errors), errors
+    assert not any("matches nothing" in str(e) and "DEV" in str(e) for e in errors), errors
 
 
 # Without a parameter file there is nothing to check.
@@ -252,13 +254,24 @@ def test_no_parameter_file_passes(fabric_repo: FabricRepo) -> None:
     assert check_parameters(load_deploy_config(fabric_repo.config)).errors == []
 
 
-# An unreadable parameter file is a FabkitError, not a traceback.
-@pytest.mark.parametrize("content", [b"find_replace: [\n", b"find_replace: \x93x\x94\n"])
-def test_unreadable_parameter_file_fails(fabric_repo: FabricRepo, content: bytes) -> None:
+# An unreadable parameter file is an error on that file.
+@pytest.mark.parametrize(
+    ("content", "fragment"),
+    [
+        (b"find_replace: [\n", "invalid YAML"),
+        (b"find_replace: \x93x\x94\n", "invalid YAML"),
+        (b"- a\n", "expected a mapping"),
+    ],
+)
+def test_unreadable_parameter_file_fails(
+    fabric_repo: FabricRepo, content: bytes, fragment: str
+) -> None:
     (fabric_repo.root / "src/parameter.yml").write_bytes(content)
 
-    with pytest.raises(FabkitError, match="invalid YAML"):
-        check_parameters(load_deploy_config(fabric_repo.config))
+    errors = check_parameters(load_deploy_config(fabric_repo.config)).errors
+
+    assert [error.file for error in errors] == [fabric_repo.root / "src/parameter.yml"]
+    assert_reported(errors, fragment)
 
 
 PROD_LAKEHOUSE = find_replace(GUID_A, DEV=GUID_A, PROD="$ENV:PROD_LAKEHOUSE")
