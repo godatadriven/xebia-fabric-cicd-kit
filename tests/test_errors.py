@@ -61,6 +61,7 @@ def test_findings_deduplicated_and_indented(tmp_path: Path) -> None:
             "2 errors and 1 warning in 2 files",
         ),
         (Findings(errors=[Issue(None, "x")]), "1 error"),
+        (Findings(warnings=[Issue(Path("a"), "x")]), "1 warning in 1 file"),
     ],
 )
 def test_summary(findings: Findings, summary: str) -> None:

@@ -151,19 +151,16 @@ def _fabric_cicd_findings(config: DeployConfig, environments: list[str]) -> Find
 
     findings = Findings()
     for environment in environments:
+        messages: list[str] = []
         with collect_check_logs() as collected:
             try:
                 load_config_file(str(config.path), environment)
             # fabric-cicd raises ConfigValidationError with every message
             except Exception as error:
                 messages = getattr(error, "validation_errors", None) or [str(error)]
-                findings.errors += [
-                    Issue(config.path, f"fabric-cicd ({environment}): {message}")
-                    for message in messages
-                ]
         findings.errors += [
             Issue(config.path, f"fabric-cicd ({environment}): {message}")
-            for message in collected.messages
+            for message in [*messages, *collected.messages]
         ]
         findings.warnings += [Issue(config.path, f"fabric-cicd: {m}") for m in collected.warnings]
     return findings
@@ -228,7 +225,9 @@ def _duplicate_item_errors(config: DeployConfig, directories: dict[str, Path]) -
             if config.in_scope(environment, item.type):
                 folders[(item.type, item.name)].append(item.folder)
         for (item_type, name), paths in folders.items():
-            for path in paths if len(paths) > 1 else []:
+            if len(paths) < 2:
+                continue
+            for path in paths:
                 others = ", ".join(str(p.relative_to(directory)) for p in paths if p != path)
                 errors.append(
                     Issue(

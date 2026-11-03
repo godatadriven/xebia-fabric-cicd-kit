@@ -330,3 +330,15 @@ def test_env_reference(
         assert_reported(errors, fragment)
     if not variables:
         assert "PROD_LAKEHOUSE" not in os.environ, "a stand-in variable was left behind"
+
+
+# A parameter path that cannot be read is an error on that path.
+def test_parameter_path_not_readable_fails(fabric_repo: FabricRepo) -> None:
+    parameter_file = fabric_repo.root / "src/parameter.yml"
+    parameter_file.unlink()
+    parameter_file.mkdir()
+
+    errors = check_parameters(load_deploy_config(fabric_repo.config)).errors
+
+    assert [error.file for error in errors] == [parameter_file]
+    assert_reported(errors, "cannot be read")

@@ -63,6 +63,7 @@ fabkit also requires `unpublish.skip` to be set explicitly, and every environmen
 - **Connections in variable libraries** are checked when the variable name matches `--connection-variables` (default `ConnectionID$`).
 - **Uploads** replace the whole target folder. fabkit refuses a folder with files it did not upload, unless `--replace-existing` (`--upload-replace-existing` on `deploy`) is passed. dbt's `target`, `logs` and `profiles.yml` are left out.
 - **Semantic model takeover** needs Member or Admin on the workspace, and the tenant setting that lets service principals use Power BI APIs.
+- **Output:** the checks report every problem at the end, grouped by file. fabric-cicd's own validation warnings appear there as warnings; they do not fail the run.
 - **Debug logging:** set `RUNNER_DEBUG=1`. GitHub sets it on a debug re-run.
 
 ## Setup in Azure and GitHub

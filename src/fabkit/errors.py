@@ -88,11 +88,13 @@ def print_findings(findings: Findings, stream: TextIO | None = None) -> None:
 
 
 def summarize_findings(findings: Findings) -> str:
-    """'3 errors and 1 warning in 2 files'."""
+    """'3 errors and 1 warning in 2 files'. A count of zero is left out."""
     files = {issue.file for issue in [*findings.errors, *findings.warnings] if issue.file}
-    counts = _plural(len(set(findings.errors)), "error")
-    if findings.warnings:
-        counts += f" and {_plural(len(set(findings.warnings)), 'warning')}"
+    counts = " and ".join(
+        _plural(len(set(issues)), word)
+        for issues, word in ((findings.errors, "error"), (findings.warnings, "warning"))
+        if issues
+    )
     return f"{counts} in {_plural(len(files), 'file')}" if files else counts
 
 

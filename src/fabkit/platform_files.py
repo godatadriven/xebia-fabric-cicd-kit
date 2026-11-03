@@ -67,7 +67,9 @@ def check_logical_ids(root: Path) -> Findings:
             files_by_id[logical_id].append(path)
 
     for logical_id, paths in sorted(files_by_id.items()):
-        for path in paths if len(paths) > 1 else []:
+        if len(paths) < 2:
+            continue
+        for path in paths:
             others = ", ".join(display_path(other) for other in paths if other != path)
             message = f"logicalId {logical_id} is also used by {others}."
             if logical_id == PLACEHOLDER_LOGICAL_ID:

@@ -122,7 +122,8 @@ def load_parameters(parameter_file: Path) -> dict[str, Any]:
     """The parameter file as a mapping, as read_parameters. Fails when it cannot be read."""
     parameters, problem = read_parameters(parameter_file)
     if problem:
-        raise FabkitError(f"{parameter_file.name}: {problem}")
+        summary, *details = problem.splitlines()
+        raise FabkitError(f"{parameter_file.name}: {summary}", details)
     return parameters
 
 
@@ -133,9 +134,15 @@ def read_parameters(parameter_file: Path) -> tuple[dict[str, Any], str | None]:
     $ENV: values stay as written. fabric-cicd's validation reports a template it cannot read.
     """
     try:
-        loaded = yaml.safe_load(parameter_file.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, UnicodeDecodeError) as error:
-        return {}, f"invalid YAML: {error}"
+        text = parameter_file.read_text(encoding="utf-8")
+    except OSError as error:
+        return {}, f"cannot be read: {error}"
+    except UnicodeDecodeError as error:
+        return {}, f"invalid YAML:\n{error}"
+    try:
+        loaded = yaml.safe_load(text) or {}
+    except yaml.YAMLError as error:
+        return {}, f"invalid YAML:\n{error}"
     if not isinstance(loaded, dict):
         return {}, "expected a mapping at the top level."
     if "extend" not in loaded:

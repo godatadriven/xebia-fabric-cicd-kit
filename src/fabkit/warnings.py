@@ -22,16 +22,12 @@ FATAL_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^Failed to unpublish ", re.IGNORECASE),
 )
 
-# fabric-cicd warnings left out of the check report.
-# _ALL_ is valid; constants overrides are expected; fabkit reports missing environments itself.
+# fabric-cicd warnings about valid files, or that fabkit reports itself, left out of the report
 IGNORED_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"Found the reserved environment key", re.IGNORECASE),
     re.compile(r"^Override constant ", re.IGNORECASE),
     re.compile(r"^Environment '.*' not found in ", re.IGNORECASE),
 )
-
-# The fabric-cicd loggers with a console handler
-CONSOLE_LOGGERS = ("fabric_cicd", "console_only")
 
 
 class FatalLogCollector(logging.Handler):
@@ -76,13 +72,11 @@ def collect_check_logs() -> Iterator[FatalLogCollector]:
 
     Other warnings go to the collector's warnings.
     """
-    loggers = [logging.getLogger(name) for name in CONSOLE_LOGGERS]
-    saved = [(logger, logger.handlers[:]) for logger in loggers]
-    for logger in loggers:
-        logger.handlers = [h for h in logger.handlers if not _is_console(h)]
+    logger = logging.getLogger("fabric_cicd")
+    handlers = logger.handlers[:]
+    logger.handlers = [handler for handler in handlers if not _is_console(handler)]
     try:
         with collect_fatal_logs() as collector:
             yield collector
     finally:
-        for logger, handlers in saved:
-            logger.handlers = handlers
+        logger.handlers = handlers
