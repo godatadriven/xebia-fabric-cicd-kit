@@ -1,15 +1,17 @@
 import pytest
 from helpers import CONFIG, PLATFORM, FabricRepo, assert_reported
 
-from fabkit.config import check_config, load_deploy_config
-from fabkit.errors import FabkitError
+from fabkit.config import ENVIRONMENT_MAPPED_SETTINGS, check_config, load_deploy_config
+from fabkit.errors import FabkitError, Issue
 
 WORKSPACES = "  workspace:\n    DEV: sales-dev\n    PROD: sales-prod\n"
 EMPTY_SRC = CONFIG.replace("repository_directory: src", "repository_directory: empty")
 PIPELINE = PLATFORM.replace("1111", "2222").replace("Notebook", "DataPipeline")
 
 
-def config_errors(repo: FabricRepo, config: str, files: dict[str, str] | None = None) -> list[str]:
+def config_errors(
+    repo: FabricRepo, config: str, files: dict[str, str] | None = None
+) -> list[Issue]:
     repo.write("config.yml", config)
     for path, text in (files or {}).items():
         repo.write(path, text)
@@ -42,9 +44,18 @@ def config_errors(repo: FabricRepo, config: str, files: dict[str, str] | None = 
             id="unreferenced-parameter-file",
         ),
         pytest.param(
+            CONFIG.replace(
+                "  parameter: src/parameter.yml\n",
+                "  parameter:\n    DEV: src/parameter.yml\n",
+            ),
+            {},
+            ("core.parameter", "PROD"),
+            id="parameter-per-environment",
+        ),
+        pytest.param(
             CONFIG.replace("repository_directory: src", "repository_directory: nope"),
             {},
-            ("fabric-cicd rejected",),
+            ("fabric-cicd (DEV)", "repository_directory"),
             id="fabric-cicd",
         ),
         pytest.param(
@@ -138,7 +149,7 @@ def test_empty_repository_reports_unpublishing_environments(fabric_repo: FabricR
     errors = config_errors(fabric_repo, config, {"empty/.keep": ""})
 
     assert_reported(errors, "PROD", "no items")
-    assert not any("DEV" in e for e in errors), errors
+    assert not any("DEV" in str(e) for e in errors), errors
 
 
 # Environments are the workspace keys; paths resolve relative to the config file.
@@ -160,3 +171,15 @@ def test_unreadable_config_fails(fabric_repo: FabricRepo, content: bytes, messag
 
     with pytest.raises(FabkitError, match=message):
         load_deploy_config(fabric_repo.config)
+
+
+# fabkit checks every setting fabric-cicd warns about when an environment is missing.
+def test_missing_environment_warnings_are_checked() -> None:
+    from fabric_cicd._common._config_validator import _get_config_fields
+
+    warned = {name for *_, name, _, warns in _get_config_fields({}) if warns}
+    checked = {
+        f"{section}.{key}" for section, keys in ENVIRONMENT_MAPPED_SETTINGS.items() for key in keys
+    }
+
+    assert warned - checked == {"features", "constants"}

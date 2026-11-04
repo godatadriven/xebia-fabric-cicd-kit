@@ -1,10 +1,11 @@
 import inspect
 import logging
 
+import pytest
 from fabric_cicd import fabric_workspace
 from fabric_cicd._items import _semanticmodel, _variablelibrary
 
-from fabkit.warnings import FATAL_WARNING_PATTERNS, collect_fatal_logs
+from fabkit.warnings import FATAL_WARNING_PATTERNS, collect_check_logs, collect_fatal_logs
 
 # The texts the pinned fabric-cicd logs, with the f-string fields filled in
 SAMPLES = (
@@ -58,3 +59,23 @@ def test_collector_keeps_errors_and_fatal_warnings_only() -> None:
     logger.error("after")
 
     assert collected.messages == [f"{SAMPLES[0]} [warning treated as failure]", "publish failed"]
+
+
+# Inside the block nothing reaches the console; other warnings are kept, known noise is not.
+def test_check_logs_are_collected_not_printed(capsys: pytest.CaptureFixture[str]) -> None:
+    logger = logging.getLogger("fabric_cicd")
+    console = logging.StreamHandler()
+    logger.addHandler(console)
+    try:
+        with collect_check_logs() as collected:
+            logger.error("validation failed")
+            logger.warning("gateway is deprecated")
+            logger.warning("Found the reserved environment key '_ALL_'")
+            logger.warning("The replace value: 'x' will be applied for any target environment")
+        assert console in logger.handlers
+    finally:
+        logger.removeHandler(console)
+
+    assert capsys.readouterr().err == ""
+    assert collected.messages == ["validation failed"]
+    assert collected.warnings == ["gateway is deprecated"]

@@ -13,9 +13,9 @@ from typing import Any, Literal, NamedTuple
 import yaml
 
 from fabkit.config import DeployConfig
-from fabkit.errors import FabkitError, Findings
+from fabkit.errors import FabkitError, Findings, Issue
 from fabkit.platform_files import read_items
-from fabkit.warnings import collect_fatal_logs
+from fabkit.warnings import collect_check_logs
 
 # fabric-cicd's key for "same value in every environment"
 ALL_ENVIRONMENTS_KEY = "_ALL_"
@@ -77,8 +77,11 @@ def check_parameters(
     """
     findings = Findings()
     for parameter_file, environments in _files_by_environment(config).items():
-        parameters = load_parameters(parameter_file)
-        errors = _fabric_cicd_errors(
+        parameters, problem = read_parameters(parameter_file)
+        if problem:
+            findings.errors.append(Issue(parameter_file, problem))
+            continue
+        errors, warnings = _fabric_cicd_findings(
             config, parameter_file, parameters, environments, target_environment
         )
         errors += [
@@ -96,11 +99,12 @@ def check_parameters(
             pending += _pending_messages(block, target_environment)
         unmatched = _unmatched_find_values(config, parameters, environments)
 
-        findings.errors += list(dict.fromkeys(errors))
+        findings.errors += [Issue(parameter_file, message) for message in dict.fromkeys(errors)]
+        findings.warnings += [Issue(parameter_file, message) for message in dict.fromkeys(warnings)]
         pending_to = findings.warnings if target_environment is None else findings.errors
-        pending_to.extend(pending)
+        pending_to.extend(Issue(parameter_file, message) for message in pending)
         unmatched_to = findings.errors if unmatched_find_value == "error" else findings.warnings
-        unmatched_to.extend(unmatched)
+        unmatched_to.extend(Issue(parameter_file, message) for message in unmatched)
     return findings
 
 
@@ -115,28 +119,46 @@ def _files_by_environment(config: DeployConfig) -> dict[Path, list[str]]:
 
 
 def load_parameters(parameter_file: Path) -> dict[str, Any]:
+    """The parameter file as a mapping, as read_parameters. Fails when it cannot be read."""
+    parameters, problem = read_parameters(parameter_file)
+    if problem:
+        summary, *details = problem.splitlines()
+        raise FabkitError(f"{parameter_file.name}: {summary}", details)
+    return parameters
+
+
+def read_parameters(parameter_file: Path) -> tuple[dict[str, Any], str | None]:
     """The parameter file as a mapping, with the templates under extend merged in.
 
+    Returns an empty mapping and the reason when the file cannot be read.
     $ENV: values stay as written. fabric-cicd's validation reports a template it cannot read.
     """
     try:
-        loaded = yaml.safe_load(parameter_file.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, UnicodeDecodeError) as error:
-        raise FabkitError(f"{parameter_file.name}: invalid YAML.", [str(error)]) from error
+        text = parameter_file.read_text(encoding="utf-8")
+    except OSError as error:
+        return {}, f"cannot be read: {error}"
+    except UnicodeDecodeError as error:
+        return {}, f"invalid YAML:\n{error}"
+    try:
+        loaded = yaml.safe_load(text) or {}
+    except yaml.YAMLError as error:
+        return {}, f"invalid YAML:\n{error}"
     if not isinstance(loaded, dict):
-        raise FabkitError(f"{parameter_file.name}: expected a mapping at the top level.")
+        return {}, "expected a mapping at the top level."
     if "extend" not in loaded:
-        return loaded
+        return loaded, None
 
     from fabric_cicd._parameter._parameter import Parameter
 
-    parameter = Parameter(
-        repository_directory=parameter_file.parent,
-        item_type_in_scope=[],
-        environment="",
-        parameter_file_path=str(parameter_file),
-    )
-    return dict(parameter.environment_parameter)
+    # Template problems are logged again, and reported, by the validation
+    with collect_check_logs():
+        parameter = Parameter(
+            repository_directory=parameter_file.parent,
+            item_type_in_scope=[],
+            environment="",
+            parameter_file_path=str(parameter_file),
+        )
+    return dict(parameter.environment_parameter), None
 
 
 def enumerate_mappings(value: Any) -> list[tuple[int, dict[str, Any]]]:
@@ -404,14 +426,16 @@ def _stand_in_env_variables(names: set[str]) -> Iterator[None]:
             os.environ.pop(name, None)
 
 
-def _fabric_cicd_errors(
+def _fabric_cicd_findings(
     config: DeployConfig,
     parameter_file: Path,
     parameters: dict[str, Any],
     environments: list[str],
     target_environment: str | None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     """fabric-cicd's own parameter validation, once per environment that uses the file.
+
+    Returns the errors and the warnings.
 
     config.yml's feature flags apply, as in deploy_with_config. $ENV: variables must be set
     only for the deploy target.
@@ -421,14 +445,14 @@ def _fabric_cicd_errors(
     from fabric_cicd.constants import ACCEPTED_ITEM_TYPES
 
     env_references = set(ENV_REFERENCE_PATTERN.findall(json.dumps(parameters)))
-    errors = []
+    errors, warnings = [], []
     for environment in environments:
         stand_ins = set() if environment == target_environment else env_references
         # fabric-cicd logs some errors and still passes the file; deploy fails on them
         with (
             config_overrides_scope(config.raw, environment),
             _stand_in_env_variables(stand_ins),
-            collect_fatal_logs() as collected,
+            collect_check_logs() as collected,
         ):
             parameter = Parameter(
                 repository_directory=config.repository_directory(environment),
@@ -440,14 +464,12 @@ def _fabric_cicd_errors(
                 valid = parameter._validate_parameter_file()
             except Exception as error:  # fabric-cicd's validator crashes on some malformed entries
                 errors.append(
-                    f"fabric-cicd could not validate {parameter_file.name} for {environment}: "
+                    f"fabric-cicd ({environment}) could not validate the file: "
                     f"{type(error).__name__}: {error}. Check the structure of every entry."
                 )
                 continue
-        errors += [
-            f"fabric-cicd, {parameter_file.name} for {environment}: {message}"
-            for message in collected.messages
-        ]
+        errors += [f"fabric-cicd ({environment}): {message}" for message in collected.messages]
+        warnings += [f"fabric-cicd: {message}" for message in collected.warnings]
         if not valid:
-            errors.append(f"fabric-cicd rejected {parameter_file.name} for {environment}.")
-    return errors
+            errors.append(f"fabric-cicd ({environment}) rejected the file.")
+    return errors, warnings

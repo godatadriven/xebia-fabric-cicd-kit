@@ -2,7 +2,7 @@ import pytest
 from helpers import CONFIG, WORKSPACE_ID, FabricRepo, FakeCredential, FakeFabric, platform_json
 
 from fabkit.config import load_deploy_config
-from fabkit.errors import Findings
+from fabkit.errors import Findings, Issue
 from fabkit.takeover import take_over_semantic_models
 from fabkit.workspaces import POWER_BI_API_ROOT
 
@@ -65,7 +65,7 @@ def test_failed_takeover_warns(fabric_repo: FabricRepo, models: FakeFabric) -> N
     findings = take_over(fabric_repo)
 
     reason = f"POST {takeover_url('sm-1')} failed with HTTP 401. no access"
-    assert findings.warnings == [f"Semantic model sales: takeover failed: {reason}"]
+    assert findings.warnings == [Issue(None, f"Semantic model sales: takeover failed: {reason}")]
 
 
 # Takeover is skipped without API calls when the deploy publishes no semantic models.

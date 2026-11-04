@@ -8,7 +8,7 @@ from typing import Any
 
 from fabkit import workspaces
 from fabkit.config import DeployConfig
-from fabkit.errors import FabkitError, Findings
+from fabkit.errors import FabkitError, Findings, Issue
 from fabkit.platform_files import read_items
 from fabkit.workspaces import FABRIC_API_ROOT, POWER_BI_API_ROOT, POWER_BI_SCOPE
 
@@ -29,7 +29,9 @@ def take_over_semantic_models(
     for key in ("folder_exclude_regex", "folder_path_to_include"):
         if config.value("publish", key, environment):
             return Findings(
-                warnings=[f"Semantic model takeover skipped: publish.{key} is not supported."]
+                warnings=[
+                    Issue(None, f"Semantic model takeover skipped: publish.{key} is not supported.")
+                ]
             )
 
     names = select_published(config, environment)
@@ -57,7 +59,9 @@ def take_over_semantic_models(
             taken += 1
         except FabkitError as problem:
             reason = " ".join([problem.summary, *problem.details])
-            findings.warnings.append(f"Semantic model {name}: takeover failed: {reason}")
+            findings.warnings.append(
+                Issue(None, f"Semantic model {name}: takeover failed: {reason}")
+            )
 
     in_workspace = sum(1 for name in names if name in deployed)
     print(f"Took over {taken} of {in_workspace} deployed semantic models.")

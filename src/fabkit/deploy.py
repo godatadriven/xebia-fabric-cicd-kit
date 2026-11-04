@@ -10,7 +10,7 @@ from typing import Any, Literal
 from fabkit import workspaces
 from fabkit.config import DeployConfig, check_config, load_deploy_config, require_environment
 from fabkit.connections import verify_connections
-from fabkit.errors import FabkitError, Findings, print_warnings
+from fabkit.errors import FabkitError, Findings, print_findings, print_warnings, summarize_findings
 from fabkit.parameters import check_parameters
 from fabkit.platform_files import check_logical_ids
 from fabkit.takeover import take_over_semantic_models
@@ -59,9 +59,12 @@ def run_deploy(args: argparse.Namespace) -> int:
     require_environment(config, environment)
 
     findings = run_checks(config, target_environment=environment)
+    if findings.errors or findings.warnings:
+        print_findings(findings)
     if findings.errors:
-        raise FabkitError("Checks failed. Nothing was published.", findings.errors)
-    print_warnings(findings.warnings)
+        raise FabkitError(
+            f"Checks failed with {summarize_findings(findings)}. Nothing was published."
+        )
 
     uploads: list[Upload] = args.upload or []
     check_uploads(uploads)

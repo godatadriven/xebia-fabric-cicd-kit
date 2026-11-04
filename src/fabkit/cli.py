@@ -11,21 +11,21 @@ from pathlib import Path
 from fabkit.config import load_deploy_config
 from fabkit.connections import DEFAULT_CONNECTION_VARIABLES
 from fabkit.deploy import run_checks, run_deploy
-from fabkit.errors import FabkitError, Findings, print_warnings
+from fabkit.errors import FabkitError, Findings, print_findings, summarize_findings
 from fabkit.platform_files import check_logical_ids
 from fabkit.uploads import check_target, parse_upload, run_upload
 from fabkit.value_sets import check_value_sets
 
 
 def report(findings: Findings, what: str) -> int:
-    """Print findings and return the exit code."""
-    print_warnings(findings.warnings)
-    for error in findings.errors:
-        print(f"error: {error}", file=sys.stderr)
+    """Print findings grouped by file and return the exit code."""
+    if findings.errors or findings.warnings:
+        print_findings(findings)
     if findings.errors:
-        print(f"{what} failed with {len(findings.errors)} error(s).", file=sys.stderr)
+        print(f"{what} failed with {summarize_findings(findings)}.", file=sys.stderr)
         return 1
-    print(f"{what} passed.")
+    with_warnings = f" with {summarize_findings(findings)}" if findings.warnings else ""
+    print(f"{what} passed{with_warnings}.")
     return 0
 
 
@@ -136,9 +136,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def print_header(command: str) -> None:
+    """Print the fabkit version and the command, before any output of the command."""
+    # Flushed so it comes first when stdout and stderr go to the same pipe
+    print(f"=== fabkit {version('xebia-fabkit')} · {command} ===\n", flush=True)
+
+
 def run(parser: argparse.ArgumentParser, argv: list[str] | None) -> int:
     """Parse argv and run the chosen subcommand."""
     args = parser.parse_args(argv)
+    print_header(args.command)
     try:
         return int(args.func(args))
     except FabkitError as error:
