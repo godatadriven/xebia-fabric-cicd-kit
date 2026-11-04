@@ -1,7 +1,7 @@
 import pytest
 from helpers import CONFIG, PLATFORM, FabricRepo, assert_reported
 
-from fabkit.config import check_config, load_deploy_config
+from fabkit.config import ENVIRONMENT_MAPPED_SETTINGS, check_config, load_deploy_config
 from fabkit.errors import FabkitError, Issue
 
 WORKSPACES = "  workspace:\n    DEV: sales-dev\n    PROD: sales-prod\n"
@@ -42,6 +42,15 @@ def config_errors(
             {},
             ("parameter.yml", "ignores"),
             id="unreferenced-parameter-file",
+        ),
+        pytest.param(
+            CONFIG.replace(
+                "  parameter: src/parameter.yml\n",
+                "  parameter:\n    DEV: src/parameter.yml\n",
+            ),
+            {},
+            ("core.parameter", "PROD"),
+            id="parameter-per-environment",
         ),
         pytest.param(
             CONFIG.replace("repository_directory: src", "repository_directory: nope"),
@@ -162,3 +171,15 @@ def test_unreadable_config_fails(fabric_repo: FabricRepo, content: bytes, messag
 
     with pytest.raises(FabkitError, match=message):
         load_deploy_config(fabric_repo.config)
+
+
+# fabkit checks every setting fabric-cicd warns about when an environment is missing.
+def test_missing_environment_warnings_are_checked() -> None:
+    from fabric_cicd._common._config_validator import _get_config_fields
+
+    warned = {name for *_, name, _, warns in _get_config_fields({}) if warns}
+    checked = {
+        f"{section}.{key}" for section, keys in ENVIRONMENT_MAPPED_SETTINGS.items() for key in keys
+    }
+
+    assert warned - checked == {"features", "constants"}

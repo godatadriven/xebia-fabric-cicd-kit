@@ -15,7 +15,7 @@ from fabkit.warnings import collect_check_logs
 
 # Settings fabric-cicd reads per environment, besides features and constants
 ENVIRONMENT_MAPPED_SETTINGS = {
-    "core": ("item_types_in_scope",),
+    "core": ("item_types_in_scope", "parameter"),
     "publish": (
         "exclude_regex",
         "folder_exclude_regex",
