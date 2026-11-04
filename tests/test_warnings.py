@@ -71,6 +71,7 @@ def test_check_logs_are_collected_not_printed(capsys: pytest.CaptureFixture[str]
             logger.error("validation failed")
             logger.warning("gateway is deprecated")
             logger.warning("Found the reserved environment key '_ALL_'")
+            logger.warning("The replace value: 'x' will be applied for any target environment")
         assert console in logger.handlers
     finally:
         logger.removeHandler(console)

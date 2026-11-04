@@ -25,6 +25,7 @@ FATAL_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
 # fabric-cicd warnings about valid files, or that fabkit reports itself, left out of the report
 IGNORED_WARNING_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"Found the reserved environment key", re.IGNORECASE),
+    re.compile(r"will be applied for any target environment", re.IGNORECASE),
     re.compile(r"^Override constant ", re.IGNORECASE),
     re.compile(r"^Environment '.*' not found in ", re.IGNORECASE),
 )
